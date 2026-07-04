@@ -239,7 +239,12 @@ namespace bgfx { namespace metal
 		"BgfxSampler2DMS",
 	};
 
-	static uint16_t writeUniformArray(bx::WriterI* _shaderWriter, const UniformArray& uniforms, bool isFragmentShader)
+	// Metal-specific variant of the envelope uniform writer. It intentionally (or
+	// historically) differs from the shared writeUniformArray in shaderc.h: it sums
+	// regCount*16 across every record (including samplers) rather than taking the max
+	// over data uniforms. Kept separate to preserve the existing Metal output byte
+	// layout; unify with the shared writer only with Metal round-trip testing.
+	static uint16_t writeUniformArrayMetal(bx::WriterI* _shaderWriter, const UniformArray& uniforms, bool isFragmentShader)
 	{
 		uint16_t size = 0;
 
@@ -664,7 +669,7 @@ namespace bgfx { namespace metal
 						uniforms.push_back(un);
 					}
 
-					uint16_t size = writeUniformArray(_shaderWriter, uniforms, _options.shaderType == 'f');
+					uint16_t size = writeUniformArrayMetal(_shaderWriter, uniforms, _options.shaderType == 'f');
 
 					bx::Error err;
 

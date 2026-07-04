@@ -427,6 +427,10 @@ project "shaderc"
 
 		path.join(TINT),
 		path.join(TINT, "src"),
+
+		-- Slang: headers only. libslang is loaded dynamically at runtime
+		-- (see tools/shaderc/shaderc_slang.cpp), so there is no link entry.
+		path.join(BGFX_DIR, "3rdparty/slang/include"),
 	}
 
 	links {
@@ -445,6 +449,14 @@ project "shaderc"
 		path.join(BGFX_DIR, "tools/shaderc/**.h"),
 		path.join(BGFX_DIR, "src/vertexlayout.**"),
 		path.join(BGFX_DIR, "src/shader**"),
+	}
+
+	removefiles {
+		-- The Slang compliance suite is standalone test tooling, not part of shaderc.
+		-- refl_dump.cpp in particular uses the Slang C++ reflection API directly (which
+		-- needs link-time libslang, unlike shaderc's dlsym'd backend), so the recursive
+		-- tools/shaderc/**.cpp glob above must not pull it into the shaderc link.
+		path.join(BGFX_DIR, "tools/shaderc/slang-compliance/**"),
 	}
 
 	configuration { "mingw-*" }
@@ -491,5 +503,37 @@ project "shaderc"
 	end
 
 	strip()
+
+-- refl_dump: a standalone tool that prints the Slang reflection of a shader as
+-- shaderc_slang.cpp sees it, for debugging compliance-suite mismatches. Unlike
+-- shaderc (which dlsym's the Slang API), it uses the Slang C++ reflection wrappers
+-- directly and so links libslang -- vendored only for macOS. Guard on the host so
+-- the non-macOS CI jobs never try to link it. Build with: make refl_dump<Config>.
+if "macosx" == os.get() then
+	group "tools/shaderc"
+
+	project "refl_dump"
+		kind "ConsoleApp"
+
+		includedirs {
+			path.join(BGFX_DIR, "3rdparty/slang/include"),
+		}
+
+		files {
+			path.join(BGFX_DIR, "tools/shaderc/slang-compliance/refl_dump.cpp"),
+		}
+
+		libdirs {
+			path.join(BGFX_DIR, "tools/bin/darwin"),
+		}
+
+		links {
+			"slang",
+		}
+
+		linkoptions {
+			"-Wl,-rpath," .. path.join(BGFX_DIR, "tools/bin/darwin"),
+		}
+end
 
 group "tools"

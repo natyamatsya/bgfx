@@ -225,51 +225,7 @@ namespace bgfx { namespace spirv
 		}
 	}
 
-	static bgfx::TextureFormat::Enum s_textureFormats[] =
-	{
-		bgfx::TextureFormat::Unknown,   // spv::ImageFormatUnknown = 0
-		bgfx::TextureFormat::RGBA32F,   // spv::ImageFormatRgba32f = 1
-		bgfx::TextureFormat::RGBA16F,   // spv::ImageFormatRgba16f = 2
-		bgfx::TextureFormat::R32F,      // spv::ImageFormatR32f = 3
-		bgfx::TextureFormat::RGBA8,     // spv::ImageFormatRgba8 = 4
-		bgfx::TextureFormat::RGBA8S,    // spv::ImageFormatRgba8Snorm = 5
-		bgfx::TextureFormat::RG32F,     // spv::ImageFormatRg32f = 6
-		bgfx::TextureFormat::RG16F,     // spv::ImageFormatRg16f = 7
-		bgfx::TextureFormat::RG11B10F,  // spv::ImageFormatR11fG11fB10f = 8
-		bgfx::TextureFormat::R16F,      // spv::ImageFormatR16f = 9
-		bgfx::TextureFormat::RGBA16,    // spv::ImageFormatRgba16 = 10
-		bgfx::TextureFormat::RGB10A2,   // spv::ImageFormatRgb10A2 = 11
-		bgfx::TextureFormat::RG16,      // spv::ImageFormatRg16 = 12
-		bgfx::TextureFormat::RG8,       // spv::ImageFormatRg8 = 13
-		bgfx::TextureFormat::R16,       // spv::ImageFormatR16 = 14
-		bgfx::TextureFormat::R8,        // spv::ImageFormatR8 = 15
-		bgfx::TextureFormat::RGBA16S,   // spv::ImageFormatRgba16Snorm = 16
-		bgfx::TextureFormat::RG16S,     // spv::ImageFormatRg16Snorm = 17
-		bgfx::TextureFormat::RG8S,      // spv::ImageFormatRg8Snorm = 18
-		bgfx::TextureFormat::R16S,      // spv::ImageFormatR16Snorm = 19
-		bgfx::TextureFormat::R8S,       // spv::ImageFormatR8Snorm = 20
-		bgfx::TextureFormat::RGBA32I,   // spv::ImageFormatRgba32i = 21
-		bgfx::TextureFormat::RGBA16I,   // spv::ImageFormatRgba16i = 22
-		bgfx::TextureFormat::RGBA8I,    // spv::ImageFormatRgba8i = 23
-		bgfx::TextureFormat::R32I,      // spv::ImageFormatR32i = 24
-		bgfx::TextureFormat::RG32I,     // spv::ImageFormatRg32i = 25
-		bgfx::TextureFormat::RG16I,     // spv::ImageFormatRg16i = 26
-		bgfx::TextureFormat::RG8I,      // spv::ImageFormatRg8i = 27
-		bgfx::TextureFormat::R16I,      // spv::ImageFormatR16i = 28
-		bgfx::TextureFormat::R8I,       // spv::ImageFormatR8i = 29
-		bgfx::TextureFormat::RGBA32U,   // spv::ImageFormatRgba32ui = 30
-		bgfx::TextureFormat::RGBA16U,   // spv::ImageFormatRgba16ui = 31
-		bgfx::TextureFormat::RGBA8U,    // spv::ImageFormatRgba8ui = 32
-		bgfx::TextureFormat::R32U,      // spv::ImageFormatR32ui = 33
-		bgfx::TextureFormat::Unknown,   // spv::ImageFormatRgb10a2ui = 34
-		bgfx::TextureFormat::RG32U,     // spv::ImageFormatRg32ui = 35
-		bgfx::TextureFormat::RG16U,     // spv::ImageFormatRg16ui = 36
-		bgfx::TextureFormat::RG8U,      // spv::ImageFormatRg8ui = 37
-		bgfx::TextureFormat::R16U,      // spv::ImageFormatR16ui = 38
-		bgfx::TextureFormat::R8U,       // spv::ImageFormatR8ui = 39
-		bgfx::TextureFormat::Unknown,   // spv::ImageFormatR64ui = 40
-		bgfx::TextureFormat::Unknown,   // spv::ImageFormatR64i = 41
-	};
+	// s_textureFormats moved to imageFormatToTextureFormat in shaderc.h (shared with Slang).
 
 	static EShLanguage getLang(char _p)
 	{
@@ -342,49 +298,7 @@ namespace bgfx { namespace spirv
 		"BgfxSampler2DMS",
 	};
 
-	static uint16_t writeUniformArray(bx::WriterI* _shaderWriter, const UniformArray& uniforms, bool isFragmentShader)
-	{
-		uint16_t size = 0;
-
-		bx::ErrorAssert err;
-
-		RawBindings().write(_shaderWriter, &err);
-
-		uint16_t count = uint16_t(uniforms.size());
-		bx::write(_shaderWriter, count, &err);
-
-		uint32_t fragmentBit = isFragmentShader ? kUniformFragmentBit : 0;
-
-		for (uint16_t ii = 0; ii < count; ++ii)
-		{
-			const Uniform& un = uniforms[ii];
-
-			if ( (un.type & ~kUniformMask) > UniformType::End)
-			{
-				size = bx::max(size, (uint16_t)(un.regIndex + un.regCount*16) );
-			}
-
-			uint8_t nameSize = (uint8_t)un.name.size();
-			bx::write(_shaderWriter, nameSize, &err);
-			bx::write(_shaderWriter, un.name.c_str(), nameSize, &err);
-			bx::write(_shaderWriter, uint8_t(un.type | fragmentBit), &err);
-			bx::write(_shaderWriter, un.num, &err);
-			bx::write(_shaderWriter, un.regIndex, &err);
-			bx::write(_shaderWriter, un.regCount, &err);
-			bx::write(_shaderWriter, un.texComponent, &err);
-			bx::write(_shaderWriter, un.texDimension, &err);
-			bx::write(_shaderWriter, un.texFormat, &err);
-
-			BX_TRACE("%s, %s, %d, %d, %d"
-				, un.name.c_str()
-				, getUniformTypeName(UniformType::Enum(un.type & ~kUniformMask))
-				, un.num
-				, un.regIndex
-				, un.regCount
-				);
-		}
-		return size;
-	}
+	// writeUniformArray moved to shaderc.h (shared with the WGSL and Slang backends).
 
 	static spv_target_env getSpirvTargetVersion(uint32_t _version, bx::WriterI* _messageWriter)
 	{
@@ -804,7 +718,7 @@ namespace bgfx { namespace spirv
 
 						un.texComponent = textureComponentTypeToId(SpirvCrossBaseTypeToFormatType(componentType, imageType.depth) );
 						un.texDimension = textureDimensionToId(SpirvDimToTextureViewDimension(imageType.dim, imageType.arrayed) );
-						un.texFormat = uint16_t(s_textureFormats[imageType.format]);
+						un.texFormat = uint16_t(imageFormatToTextureFormat(imageType.format) );
 
 						un.regIndex = uint16_t(binding_index);
 						un.regCount = 0; // unused
@@ -833,7 +747,7 @@ namespace bgfx { namespace spirv
 
 						un.texComponent = textureComponentTypeToId(SpirvCrossBaseTypeToFormatType(componentType, imageType.depth) );
 						un.texDimension = textureDimensionToId(SpirvDimToTextureViewDimension(imageType.dim, imageType.arrayed) );
-						un.texFormat = uint16_t(s_textureFormats[imageType.format]);
+						un.texFormat = uint16_t(imageFormatToTextureFormat(imageType.format) );
 
 						un.regIndex = uint16_t(binding_index);
 						un.regCount = descriptorTypeToId(DescriptorType::StorageImage);

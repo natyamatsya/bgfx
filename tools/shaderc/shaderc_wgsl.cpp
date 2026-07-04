@@ -332,50 +332,7 @@ namespace bgfx { namespace wgsl
 		"BgfxSampler2DMS",
 	};
 
-	static uint16_t writeUniformArray(bx::WriterI* _shaderWriter, const UniformArray& uniforms, bool isFragmentShader)
-	{
-		uint16_t size = 0;
-
-		bx::ErrorAssert err;
-
-		RawBindings().write(_shaderWriter, &err);
-
-		uint16_t count = uint16_t(uniforms.size() );
-		bx::write(_shaderWriter, count, &err);
-
-		uint32_t fragmentBit = isFragmentShader ? kUniformFragmentBit : 0;
-
-		for (uint16_t ii = 0; ii < count; ++ii)
-		{
-			const Uniform& un = uniforms[ii];
-
-			if ( (un.type & ~kUniformMask) > UniformType::End)
-			{
-				size = bx::max(size, (uint16_t)(un.regIndex + un.regCount*16) );
-			}
-
-			uint8_t nameSize = (uint8_t)un.name.size();
-			bx::write(_shaderWriter, nameSize, &err);
-			bx::write(_shaderWriter, un.name.c_str(), nameSize, &err);
-			bx::write(_shaderWriter, uint8_t(un.type | fragmentBit), &err);
-			bx::write(_shaderWriter, un.num, &err);
-			bx::write(_shaderWriter, un.regIndex, &err);
-			bx::write(_shaderWriter, un.regCount, &err);
-			bx::write(_shaderWriter, un.texComponent, &err);
-			bx::write(_shaderWriter, un.texDimension, &err);
-			bx::write(_shaderWriter, un.texFormat, &err);
-
-			BX_TRACE("%s, %s, %d, %d, %d"
-				, un.name.c_str()
-				, getUniformTypeName(UniformType::Enum(un.type & ~kUniformMask))
-				, un.num
-				, un.regIndex
-				, un.regCount
-				);
-		}
-
-		return size;
-	}
+	// writeUniformArray moved to shaderc.h (shared with the SPIR-V and Slang backends).
 
 	static spv_target_env getSpirvTargetVersion(uint32_t _version, bx::WriterI* _messageWriter)
 	{
