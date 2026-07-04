@@ -1,1 +1,4 @@
 *
+
+# Vendored Slang compiler library (loaded dynamically by shaderc; see 3rdparty/slang).
+!libslang.dylib
