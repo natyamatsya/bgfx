@@ -4,6 +4,8 @@
 .DS_Store
 .build
 .debug
+__pycache__
+context
 .gdb_history
 .git
 .svn
