@@ -19,6 +19,7 @@
 #	define VK_IMPORT_INSTANCE_PLATFORM VK_IMPORT_INSTANCE_WINDOWS
 #elif BX_PLATFORM_OSX
 #	define VK_USE_PLATFORM_MACOS_MVK
+#	define VK_USE_PLATFORM_METAL_EXT
 #	define VK_IMPORT_INSTANCE_PLATFORM VK_IMPORT_INSTANCE_MACOS
 #elif BX_PLATFORM_NX
 # define VK_USE_PLATFORM_VI_NN
@@ -82,6 +83,8 @@
 #define VK_IMPORT_INSTANCE_MACOS                                     \
 			/* VK_MVK_macos_surface */                               \
 			VK_IMPORT_INSTANCE_FUNC(true,  vkCreateMacOSSurfaceMVK); \
+			/* VK_EXT_metal_surface */                               \
+			VK_IMPORT_INSTANCE_FUNC(true,  vkCreateMetalSurfaceEXT); \
 
 #define VK_IMPORT_INSTANCE_NX \
 			/* VK_NN_vi_surface */                              \
