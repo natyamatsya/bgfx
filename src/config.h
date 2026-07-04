@@ -234,6 +234,16 @@
 #	define BGFX_CONFIG_RENDERER_VULKAN_ROBUST_BUFFER_ACCESS 0
 #endif // BGFX_CONFIG_RENDERER_VULKAN_ROBUST_BUFFER_ACCESS
 
+/// macOS Vulkan driver. bgfx loads MoltenVK (a Metal portability driver)
+/// directly by default. Set to 1 to default to KosmicKrisp (a native
+/// Vulkan-on-Metal driver, which does not use the portability subset), or 2 to
+/// use the Vulkan loader's default ICD. Overridable at runtime with the
+/// environment variable BGFX_VULKAN_DRIVER = moltenvk | kosmickrisp | auto.
+///   0 = MoltenVK (default), 1 = KosmicKrisp, 2 = Auto (loader default)
+#ifndef BGFX_CONFIG_RENDERER_VULKAN_MACOS_DRIVER
+#	define BGFX_CONFIG_RENDERER_VULKAN_MACOS_DRIVER 0
+#endif // BGFX_CONFIG_RENDERER_VULKAN_MACOS_DRIVER
+
 /// Enable use of tinystl instead of std containers for internal data
 /// structures. Default is 1 (enabled). Reduces binary size and avoids
 /// std library dependency.
