@@ -51,6 +51,14 @@ namespace bgfx
 #	endif
 #endif
 
+#ifndef SHADERC_CONFIG_HAS_SLANG
+#	if __has_include(<slang.h>)
+#		define SHADERC_CONFIG_HAS_SLANG 1
+#	else
+#		define SHADERC_CONFIG_HAS_SLANG 0
+#	endif
+#endif
+
 #ifndef SHADERC_CONFIG_HAS_GLSLANG
 #	if __has_include(<ShaderLang.h>) \
 	&& __has_include(<SPIRV/SpvTools.h>)
@@ -82,6 +90,13 @@ namespace bgfx
 #include <string>
 #include <vector>
 #include <unordered_map>
+
+// Compiled-shader binary "envelope" format. Frozen: bumping the version changes
+// the on-disk layout consumed by src/bgfx_p.h and every renderer backend.
+#define BGFX_SHADER_BIN_VERSION 11
+#define BGFX_CHUNK_MAGIC_CSH BX_MAKEFOURCC('C', 'S', 'H', BGFX_SHADER_BIN_VERSION)
+#define BGFX_CHUNK_MAGIC_FSH BX_MAKEFOURCC('F', 'S', 'H', BGFX_SHADER_BIN_VERSION)
+#define BGFX_CHUNK_MAGIC_VSH BX_MAKEFOURCC('V', 'S', 'H', BGFX_SHADER_BIN_VERSION)
 
 namespace bgfx
 {
@@ -152,6 +167,8 @@ namespace bgfx
 
 		bool disasm;
 		bool raw;
+		bool slang;
+		bool slangNoPredefined; // Slang: don't auto-declare bgfx predefined uniforms.
 		bool preprocessOnly;
 		bool keepComments;
 		bool depends;
@@ -172,6 +189,112 @@ namespace bgfx
 
 	typedef std::vector<Uniform> UniformArray;
 
+	// Writes the uniform records of a compiled-shader envelope (count, then each
+	// record: nameSize:u8, name, type:u8(|fragmentBit), num:u8, regIndex:u16,
+	// regCount:u16, texComponent:u8, texDimension:u8, texFormat:u16). Returns the
+	// constant-buffer size. This is the single source of truth for that byte
+	// layout; the SPIR-V, WGSL and Slang backends all use it. (shaderc_metal.cpp
+	// keeps its own writeUniformArrayMetal, which computes the size differently.)
+	inline uint16_t writeUniformArray(bx::WriterI* _shaderWriter, const UniformArray& uniforms, bool isFragmentShader)
+	{
+		uint16_t size = 0;
+
+		bx::ErrorAssert err;
+
+		uint16_t count = uint16_t(uniforms.size() );
+		bx::write(_shaderWriter, count, &err);
+
+		uint32_t fragmentBit = isFragmentShader ? kUniformFragmentBit : 0;
+
+		for (uint16_t ii = 0; ii < count; ++ii)
+		{
+			const Uniform& un = uniforms[ii];
+
+			if ( (un.type & ~kUniformMask) > UniformType::End)
+			{
+				size = bx::max(size, (uint16_t)(un.regIndex + un.regCount*16) );
+			}
+
+			uint8_t nameSize = (uint8_t)un.name.size();
+			bx::write(_shaderWriter, nameSize, &err);
+			bx::write(_shaderWriter, un.name.c_str(), nameSize, &err);
+			bx::write(_shaderWriter, uint8_t(un.type | fragmentBit), &err);
+			bx::write(_shaderWriter, un.num, &err);
+			bx::write(_shaderWriter, un.regIndex, &err);
+			bx::write(_shaderWriter, un.regCount, &err);
+			bx::write(_shaderWriter, un.texComponent, &err);
+			bx::write(_shaderWriter, un.texDimension, &err);
+			bx::write(_shaderWriter, un.texFormat, &err);
+
+			BX_TRACE("%s, %s, %d, %d, %d"
+				, un.name.c_str()
+				, getUniformTypeName(UniformType::Enum(un.type & ~kUniformMask))
+				, un.num
+				, un.regIndex
+				, un.regCount
+				);
+		}
+		return size;
+	}
+
+	// Maps a SPIR-V image format (spv::ImageFormat) to a bgfx texture format. Shared by
+	// the SPIR-V and Slang backends so there is one canonical table -- new formats are
+	// handled by extending this single list. Indexed by the numeric spv::ImageFormat,
+	// which is the format-agnostic value both backends read from the shader.
+	inline bgfx::TextureFormat::Enum imageFormatToTextureFormat(uint32_t _spvImageFormat)
+	{
+		static const bgfx::TextureFormat::Enum s_textureFormats[] =
+		{
+			bgfx::TextureFormat::Unknown,   // spv::ImageFormatUnknown = 0
+			bgfx::TextureFormat::RGBA32F,   // spv::ImageFormatRgba32f = 1
+			bgfx::TextureFormat::RGBA16F,   // spv::ImageFormatRgba16f = 2
+			bgfx::TextureFormat::R32F,      // spv::ImageFormatR32f = 3
+			bgfx::TextureFormat::RGBA8,     // spv::ImageFormatRgba8 = 4
+			bgfx::TextureFormat::RGBA8S,    // spv::ImageFormatRgba8Snorm = 5
+			bgfx::TextureFormat::RG32F,     // spv::ImageFormatRg32f = 6
+			bgfx::TextureFormat::RG16F,     // spv::ImageFormatRg16f = 7
+			bgfx::TextureFormat::RG11B10F,  // spv::ImageFormatR11fG11fB10f = 8
+			bgfx::TextureFormat::R16F,      // spv::ImageFormatR16f = 9
+			bgfx::TextureFormat::RGBA16,    // spv::ImageFormatRgba16 = 10
+			bgfx::TextureFormat::RGB10A2,   // spv::ImageFormatRgb10A2 = 11
+			bgfx::TextureFormat::RG16,      // spv::ImageFormatRg16 = 12
+			bgfx::TextureFormat::RG8,       // spv::ImageFormatRg8 = 13
+			bgfx::TextureFormat::R16,       // spv::ImageFormatR16 = 14
+			bgfx::TextureFormat::R8,        // spv::ImageFormatR8 = 15
+			bgfx::TextureFormat::RGBA16S,   // spv::ImageFormatRgba16Snorm = 16
+			bgfx::TextureFormat::RG16S,     // spv::ImageFormatRg16Snorm = 17
+			bgfx::TextureFormat::RG8S,      // spv::ImageFormatRg8Snorm = 18
+			bgfx::TextureFormat::R16S,      // spv::ImageFormatR16Snorm = 19
+			bgfx::TextureFormat::R8S,       // spv::ImageFormatR8Snorm = 20
+			bgfx::TextureFormat::RGBA32I,   // spv::ImageFormatRgba32i = 21
+			bgfx::TextureFormat::RGBA16I,   // spv::ImageFormatRgba16i = 22
+			bgfx::TextureFormat::RGBA8I,    // spv::ImageFormatRgba8i = 23
+			bgfx::TextureFormat::R32I,      // spv::ImageFormatR32i = 24
+			bgfx::TextureFormat::RG32I,     // spv::ImageFormatRg32i = 25
+			bgfx::TextureFormat::RG16I,     // spv::ImageFormatRg16i = 26
+			bgfx::TextureFormat::RG8I,      // spv::ImageFormatRg8i = 27
+			bgfx::TextureFormat::R16I,      // spv::ImageFormatR16i = 28
+			bgfx::TextureFormat::R8I,       // spv::ImageFormatR8i = 29
+			bgfx::TextureFormat::RGBA32U,   // spv::ImageFormatRgba32ui = 30
+			bgfx::TextureFormat::RGBA16U,   // spv::ImageFormatRgba16ui = 31
+			bgfx::TextureFormat::RGBA8U,    // spv::ImageFormatRgba8ui = 32
+			bgfx::TextureFormat::R32U,      // spv::ImageFormatR32ui = 33
+			bgfx::TextureFormat::Unknown,   // spv::ImageFormatRgb10a2ui = 34
+			bgfx::TextureFormat::RG32U,     // spv::ImageFormatRg32ui = 35
+			bgfx::TextureFormat::RG16U,     // spv::ImageFormatRg16ui = 36
+			bgfx::TextureFormat::RG8U,      // spv::ImageFormatRg8ui = 37
+			bgfx::TextureFormat::R16U,      // spv::ImageFormatR16ui = 38
+			bgfx::TextureFormat::R8U,       // spv::ImageFormatR8ui = 39
+			bgfx::TextureFormat::Unknown,   // spv::ImageFormatR64ui = 40
+			bgfx::TextureFormat::Unknown,   // spv::ImageFormatR64i = 41
+		};
+
+		return _spvImageFormat < BX_COUNTOF(s_textureFormats)
+			? s_textureFormats[_spvImageFormat]
+			: bgfx::TextureFormat::Unknown
+			;
+	}
+
 	void printCode(const char* _code, int32_t _line = 0, int32_t _start = 0, int32_t _end = INT32_MAX, int32_t _column = -1);
 	void strReplace(char* _str, const char* _find, const char* _replace);
 	int32_t writef(bx::WriterI* _writer, const char* _format, ...);
@@ -184,6 +307,7 @@ namespace bgfx
 	bool compilePSSLShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
 	bool compileSPIRVShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
 	bool compileWgslShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
+	bool compileSlangShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
 
 	const char* getPsslPreamble();
 

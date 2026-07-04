@@ -13,10 +13,8 @@ extern "C"
 #include <fpp.h>
 } // extern "C"
 
-#define BGFX_SHADER_BIN_VERSION 11
-#define BGFX_CHUNK_MAGIC_CSH BX_MAKEFOURCC('C', 'S', 'H', BGFX_SHADER_BIN_VERSION)
-#define BGFX_CHUNK_MAGIC_FSH BX_MAKEFOURCC('F', 'S', 'H', BGFX_SHADER_BIN_VERSION)
-#define BGFX_CHUNK_MAGIC_VSH BX_MAKEFOURCC('V', 'S', 'H', BGFX_SHADER_BIN_VERSION)
+// Envelope magics (BGFX_CHUNK_MAGIC_*/BGFX_SHADER_BIN_VERSION) now live in shaderc.h
+// so both this dispatcher and shaderc_slang.cpp share one definition.
 
 #define BGFX_SHADERC_VERSION_MAJOR 1
 #define BGFX_SHADERC_VERSION_MINOR 19
@@ -396,6 +394,8 @@ namespace bgfx
 		: shaderType(' ')
 		, disasm(false)
 		, raw(false)
+		, slang(false)
+		, slangNoPredefined(false)
 		, preprocessOnly(false)
 		, keepComments(false)
 		, depends(false)
@@ -1193,6 +1193,9 @@ namespace bgfx
 		{ '\0', "define",                  1, "<defines>",      "Add defines to preprocessor. (Semicolon-separated)"                              },
 		{ '\0', "raw",                     0, NULL,             "Do not process shader. No preprocessor, and no glsl-optimizer. (GLSL only)"      },
 		{ '\0', "type",                    1, "<type>",         "Shader type. Can be 'vertex', 'fragment, or 'compute'."                          },
+		{ '\0', "lang",                    1, "<lang>",         "Source language: 'bgfx' (default) or 'slang'. Inferred from a .slang extension." },
+		{ '\0', "slang-no-predefined",     0, NULL,             "Slang: do not auto-declare bgfx predefined uniforms (u_modelViewProj, etc.);\n"
+		                                                        "declare them in the shader."                                                     },
 		{ '\0', "varyingdef",              1, "<file path>",    "varying.def.sc's file path."                                                     },
 		{ '\0', "verbose",                 0, NULL,             "Be verbose."                                                                     },
 		{ '\0', "debug",                   0, NULL,             "Debug information. (Vulkan, DirectX and Metal only)"                             },
@@ -1301,6 +1304,15 @@ namespace bgfx
 		}
 
 		const Profile* profile = &s_profiles[profileId];
+
+		// Slang source bypasses the fcpp preprocessor, bgfx_shader.sh macros, and
+		// $input/$output/varying.def.sc handling entirely: it derives everything
+		// from Slang's compiler + reflection and writes the full envelope itself.
+		if (_options.slang)
+		{
+			BX_UNUSED(_varying, _comment);
+			return compileSlangShader(_options, profile->id, std::string(_shader, _shaderLen), _shaderWriter, _messageWriter);
+		}
 
 		Preprocessor preprocessor(_options.inputFilePath.c_str(), profile->lang == ShadingLang::ESSL, _messageWriter);
 
@@ -2960,6 +2972,20 @@ namespace bgfx
 
 		options.raw = cmdLine.hasArg('\0', "raw");
 
+		// Source language: explicit --lang, else inferred from the .slang extension.
+		const char* lang = cmdLine.findOption('\0', "lang");
+		if (NULL != lang)
+		{
+			options.slang = 0 == bx::strCmpI(bx::StringView(lang), "slang");
+		}
+		else
+		{
+			const bx::StringView ext = bx::FilePath(filePath).getExt();
+			options.slang = 0 == bx::strCmpI(ext, ".slang");
+		}
+
+		options.slangNoPredefined = cmdLine.hasArg('\0', "slang-no-predefined");
+
 		const char* profile = cmdLine.findOption('p', "profile");
 
 		if ( NULL != profile)
@@ -3075,7 +3101,9 @@ namespace bgfx
 			const char* varying = NULL;
 			File attribdef;
 
-			if ('c' != options.shaderType)
+			// Slang derives varyings from reflection; it needs no varying.def.sc.
+			if ('c' != options.shaderType
+			&&  !options.slang)
 			{
 				std::string defaultVarying = dir + "varying.def.sc";
 				const char* varyingdef = cmdLine.findOption("varyingdef", defaultVarying.c_str() );
