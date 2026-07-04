@@ -408,6 +408,7 @@ VK_IMPORT_DEVICE
 			KHR_win32_surface,
 #	elif BX_PLATFORM_OSX
 			MVK_macos_surface,
+			EXT_metal_surface,
 #	elif BX_PLATFORM_NX
 			NN_vi_surface,
 #	endif
@@ -455,11 +456,45 @@ VK_IMPORT_DEVICE
 		{ VK_KHR_WIN32_SURFACE_EXTENSION_NAME,      1, false, false, true,                                                          Layer::Count },
 #	elif BX_PLATFORM_OSX
 		{ VK_MVK_MACOS_SURFACE_EXTENSION_NAME,      1, false, false, true,                                                          Layer::Count },
+		{ VK_EXT_METAL_SURFACE_EXTENSION_NAME,      1, false, false, true,                                                          Layer::Count },
 #	elif BX_PLATFORM_NX
 		{ VK_NN_VI_SURFACE_EXTENSION_NAME,          1, false, false, true,                                                          Layer::Count },
 #	endif
 	};
 	static_assert(Extension::Count == BX_COUNTOF(s_extension) );
+
+#if BX_PLATFORM_OSX
+	// macOS Vulkan driver selection. Historically bgfx loads MoltenVK (a Metal
+	// portability driver) directly. KosmicKrisp is a native Vulkan-on-Metal ICD
+	// that is reached through the Vulkan loader instead. Adapted from sov's
+	// vulkan-driver-selection (the VK_ICD_FILENAMES mechanism).
+	enum class VulkanDriver
+	{
+		MoltenVK,     // Metal portability driver, loaded directly (uses the portability subset).
+		KosmicKrisp,  // native Vulkan-on-Metal ICD, loaded via the Vulkan loader.
+		Auto,         // Vulkan loader's default ICD (honors a pre-set VK_ICD_FILENAMES).
+	};
+
+	static const char* s_kosmicKrispIcd = "/usr/local/share/vulkan/icd.d/libkosmickrisp_icd.json";
+
+	static VulkanDriver getVulkanDriver()
+	{
+		VulkanDriver driver = VulkanDriver(BGFX_CONFIG_RENDERER_VULKAN_MACOS_DRIVER);
+
+		char value[64];
+		uint32_t size = sizeof(value);
+		if (bx::getEnv(value, &size, "BGFX_VULKAN_DRIVER") )
+		{
+			const bx::StringView sv(value);
+			if      (0 == bx::strCmpI(sv, "moltenvk") )    { driver = VulkanDriver::MoltenVK;    }
+			else if (0 == bx::strCmpI(sv, "kosmickrisp") ) { driver = VulkanDriver::KosmicKrisp; }
+			else if (0 == bx::strCmpI(sv, "auto") )        { driver = VulkanDriver::Auto;        }
+			else { BX_TRACE("Vulkan: ignoring unknown BGFX_VULKAN_DRIVER=\"%s\".", value); }
+		}
+
+		return driver;
+	}
+#endif // BX_PLATFORM_OSX
 
 	bool updateExtension(const char* _name, uint32_t _version, bool _instanceExt, Extension _extensions[Extension::Count])
 	{
@@ -1299,17 +1334,37 @@ VK_IMPORT_DEVICE
 				|| NULL != findModule("Nvda.Graphics.Interception.dll")
 				);
 
-			m_vulkan1Dll = bx::dlopen(
-#if BX_PLATFORM_WINDOWS
-				"vulkan-1.dll"
-#elif BX_PLATFORM_ANDROID
-				"libvulkan.so"
-#elif BX_PLATFORM_OSX
-				"libMoltenVK.dylib"
-#else
-				"libvulkan.so.1"
-#endif // BX_PLATFORM_*
+			// On macOS, MoltenVK (a Metal portability driver) is loaded directly by
+			// default. KosmicKrisp/Auto instead go through the Vulkan loader so that
+			// VK_ICD_FILENAMES selects the ICD; native drivers also skip the
+			// portability subset (see portabilityDriver below).
+			bool portabilityDriver = BX_ENABLED(BX_PLATFORM_OSX);
+
+#if BX_PLATFORM_OSX
+			const VulkanDriver macosDriver = getVulkanDriver();
+			portabilityDriver = (VulkanDriver::MoltenVK == macosDriver);
+
+			if (VulkanDriver::KosmicKrisp == macosDriver)
+			{
+				// Point the Vulkan loader at the KosmicKrisp ICD (native Vulkan-on-Metal).
+				bx::setEnv("VK_ICD_FILENAMES", s_kosmicKrispIcd);
+			}
+
+			m_vulkan1Dll = bx::dlopen(portabilityDriver
+				? "libMoltenVK.dylib"
+				: "libvulkan.dylib"
 				);
+#else
+			m_vulkan1Dll = bx::dlopen(
+#	if BX_PLATFORM_WINDOWS
+				"vulkan-1.dll"
+#	elif BX_PLATFORM_ANDROID
+				"libvulkan.so"
+#	else
+				"libvulkan.so.1"
+#	endif // BX_PLATFORM_*
+				);
+#endif // BX_PLATFORM_OSX
 
 			if (NULL == m_vulkan1Dll)
 			{
@@ -1439,7 +1494,7 @@ VK_IMPORT
 				ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 				ici.pNext = NULL;
 				ici.flags = 0
-					| (BX_ENABLED(BX_PLATFORM_OSX) ? VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR : 0)
+					| (portabilityDriver ? VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR : 0)
 					;
 				ici.pApplicationInfo        = &appInfo;
 				ici.enabledLayerCount       = numEnabledLayers;
@@ -2097,7 +2152,7 @@ VK_IMPORT_INSTANCE
 					enabledExtension[numEnabledExtensions++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 				}
 
-				if (BX_ENABLED(BX_PLATFORM_OSX) )
+				if (portabilityDriver)
 				{
 					enabledExtension[numEnabledExtensions++] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
 				}
@@ -8120,7 +8175,12 @@ VK_DESTROY
 
 #elif BX_PLATFORM_OSX
 		{
-			if (NULL != vkCreateMacOSSurfaceMVK)
+			// Prefer the MoltenVK-specific surface when available (unchanged default,
+			// and the path used on older macOS where VK_EXT_metal_surface may be
+			// absent); fall back to the portable VK_EXT_metal_surface for native
+			// drivers such as KosmicKrisp. Both are detected by function pointer.
+			if (NULL != vkCreateMacOSSurfaceMVK
+			||  NULL != vkCreateMetalSurfaceEXT)
 			{
 				NSWindow* window    = (NSWindow*)(m_nwh);
 				CAMetalLayer* layer = (CAMetalLayer*)(m_nwh);
@@ -8140,7 +8200,7 @@ VK_DESTROY
 				}
 				else
 				{
-					BX_WARN(0, "Unable to create MoltenVk surface. Please set platform data window to an NSWindow or CAMetalLayer");
+					BX_WARN(0, "Unable to create Metal surface. Please set platform data window to an NSWindow or CAMetalLayer");
 					return result;
 				}
 
@@ -8149,13 +8209,26 @@ VK_DESTROY
 					layer.contentsScale = [window backingScaleFactor];
 				}
 
-				VkMacOSSurfaceCreateInfoMVK sci;
-				sci.sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK;
-				sci.pNext = NULL;
-				sci.flags = 0;
-				sci.pView = (__bridge void*)layer;
-				result = vkCreateMacOSSurfaceMVK(instance, &sci, allocatorCb, &m_surface);
-				BX_WARN(VK_SUCCESS == result, "vkCreateMacOSSurfaceMVK failed %d: %s.", result, getName(result) );
+				if (NULL != vkCreateMacOSSurfaceMVK)
+				{
+					VkMacOSSurfaceCreateInfoMVK sci;
+					sci.sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK;
+					sci.pNext = NULL;
+					sci.flags = 0;
+					sci.pView = (__bridge void*)layer;
+					result = vkCreateMacOSSurfaceMVK(instance, &sci, allocatorCb, &m_surface);
+					BX_WARN(VK_SUCCESS == result, "vkCreateMacOSSurfaceMVK failed %d: %s.", result, getName(result) );
+				}
+				else
+				{
+					VkMetalSurfaceCreateInfoEXT sci;
+					sci.sType  = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+					sci.pNext  = NULL;
+					sci.flags  = 0;
+					sci.pLayer = (__bridge const CAMetalLayer*)layer;
+					result = vkCreateMetalSurfaceEXT(instance, &sci, allocatorCb, &m_surface);
+					BX_WARN(VK_SUCCESS == result, "vkCreateMetalSurfaceEXT failed %d: %s.", result, getName(result) );
+				}
 			}
 		}
 #elif BX_PLATFORM_NX
