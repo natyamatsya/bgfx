@@ -202,6 +202,34 @@ configuration file, it has to be set manually for each example project:
 3. Check *"Use custom working directory"* and enter following path:
    ``${PROJECT_DIR}/../../../examples/runtime``.
 
+.. note::
+
+   **Build with the Apple toolchain, not Homebrew's.** When Homebrew is installed,
+   its ``bin`` directory (``/opt/homebrew/bin`` on Apple Silicon, ``/usr/local/bin``
+   on Intel) can precede ``/usr/bin`` on ``PATH`` and shadow Apple's ``clang``,
+   ``ar`` and ``ranlib`` with the GNU binutils / LLVM ports. On recent toolchains
+   (seen on macOS 27 / Xcode 27 beta) this shadowing turns into hard build
+   failures that look like bgfx bugs but are not:
+
+   - GNU ``ar`` writes archive members that Apple's newer ``ld`` rejects with
+     ``ld: warning: ... 64-bit mach-o not 8-byte aligned``.
+   - Homebrew ``clang++`` does not define ``__apple_build_version__``, so the
+     vendored ``metal-cpp`` skips its ``-Wnan-infinity-disabled`` guard and, under
+     ``-ffast-math``, ``INFINITY`` becomes ``use of undeclared identifier
+     'INFINITY'`` in ``metal.hpp``.
+
+   Prepend ``/usr/bin`` to ``PATH`` so Apple's tools win:
+
+   ::
+
+       PATH=/usr/bin:$PATH make osx-arm64-release
+
+   or pass the tools explicitly:
+
+   ::
+
+       make osx-arm64-release CC=/usr/bin/clang CXX=/usr/bin/clang++ AR=/usr/bin/ar
+
 Linux
 ~~~~~
 
