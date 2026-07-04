@@ -7,6 +7,7 @@
 
 #if BGFX_CONFIG_RENDERER_VULKAN
 #	include <bx/pixelformat.h>
+#	include <bx/file.h>       // bx::stat, for the KosmicKrisp ICD existence check
 #	include "renderer_vk.h"
 #	include "video_vk.h"
 
@@ -470,11 +471,22 @@ VK_IMPORT_DEVICE
 	// vulkan-driver-selection (the VK_ICD_FILENAMES mechanism).
 	enum class VulkanDriver
 	{
-		MoltenVK,     // Metal portability driver, loaded directly (uses the portability subset).
-		KosmicKrisp,  // native Vulkan-on-Metal ICD, loaded via the Vulkan loader.
-		Auto,         // Vulkan loader's default ICD (honors a pre-set VK_ICD_FILENAMES).
+		MoltenVK,     // 0: Metal portability driver, loaded directly (uses the portability subset).
+		KosmicKrisp,  // 1: native Vulkan-on-Metal ICD, loaded via the Vulkan loader.
+		Auto,         // 2: Vulkan loader's default ICD (honors a pre-set VK_DRIVER_FILES).
 	};
+	// The enum values are the BGFX_CONFIG_RENDERER_VULKAN_MACOS_DRIVER contract (config.h).
+	static_assert(0 == int(VulkanDriver::MoltenVK)
+		&&        1 == int(VulkanDriver::KosmicKrisp)
+		&&        2 == int(VulkanDriver::Auto)
+		, "VulkanDriver values must match BGFX_CONFIG_RENDERER_VULKAN_MACOS_DRIVER."
+		);
+	static_assert(BGFX_CONFIG_RENDERER_VULKAN_MACOS_DRIVER >= 0
+		&&        BGFX_CONFIG_RENDERER_VULKAN_MACOS_DRIVER <= 2
+		, "BGFX_CONFIG_RENDERER_VULKAN_MACOS_DRIVER must be 0 (MoltenVK), 1 (KosmicKrisp) or 2 (Auto)."
+		);
 
+	// Default location of the KosmicKrisp ICD manifest; overridable with BGFX_VULKAN_ICD.
 	static const char* s_kosmicKrispIcd = "/usr/local/share/vulkan/icd.d/libkosmickrisp_icd.json";
 
 	static VulkanDriver getVulkanDriver()
@@ -1336,9 +1348,10 @@ VK_IMPORT_DEVICE
 
 			// On macOS, MoltenVK (a Metal portability driver) is loaded directly by
 			// default. KosmicKrisp/Auto instead go through the Vulkan loader so that
-			// VK_ICD_FILENAMES selects the ICD; native drivers also skip the
-			// portability subset (see portabilityDriver below).
-			bool portabilityDriver = BX_ENABLED(BX_PLATFORM_OSX);
+			// VK_DRIVER_FILES selects the ICD; native drivers also skip the portability
+			// subset. Only MoltenVK uses the portability subset -- set per-driver on macOS
+			// just below, and off on every other platform.
+			bool portabilityDriver = false;
 
 #if BX_PLATFORM_OSX
 			const VulkanDriver macosDriver = getVulkanDriver();
@@ -1347,13 +1360,45 @@ VK_IMPORT_DEVICE
 			if (VulkanDriver::KosmicKrisp == macosDriver)
 			{
 				// Point the Vulkan loader at the KosmicKrisp ICD (native Vulkan-on-Metal).
-				bx::setEnv("VK_ICD_FILENAMES", s_kosmicKrispIcd);
+				// The baked-in path assumes the /usr/local Homebrew prefix; BGFX_VULKAN_ICD
+				// overrides it (e.g. /opt/homebrew on Apple Silicon). Warn when the manifest is
+				// missing so a wrong path fails clearly, not as an opaque instance-create error.
+				const char* icd = s_kosmicKrispIcd;
+
+				char icdPath[512];
+				uint32_t icdSize = sizeof(icdPath);
+				if (bx::getEnv(icdPath, &icdSize, "BGFX_VULKAN_ICD") )
+				{
+					icd = icdPath;
+				}
+
+				bx::FileInfo fi;
+				if (!bx::stat(fi, icd) )
+				{
+					BX_TRACE("Vulkan: KosmicKrisp ICD manifest not found at \"%s\". "
+						"Set BGFX_VULKAN_ICD to its location or install the driver.", icd);
+				}
+
+				// VK_DRIVER_FILES is the modern loader variable; VK_ICD_FILENAMES is its
+				// deprecated alias. Set both so old and new Vulkan loaders find the ICD.
+				bx::setEnv("VK_DRIVER_FILES",  icd);
+				bx::setEnv("VK_ICD_FILENAMES", icd);
 			}
 
 			m_vulkan1Dll = bx::dlopen(portabilityDriver
 				? "libMoltenVK.dylib"
 				: "libvulkan.dylib"
 				);
+
+			if (NULL == m_vulkan1Dll
+			&&  !portabilityDriver)
+			{
+				// The KosmicKrisp/Auto paths need the Vulkan loader, not MoltenVK directly.
+				BX_TRACE("Vulkan: failed to load the Vulkan loader 'libvulkan.dylib' for the %s "
+					"driver. Install the Vulkan SDK/loader, or set BGFX_VULKAN_DRIVER=moltenvk."
+					, VulkanDriver::KosmicKrisp == macosDriver ? "KosmicKrisp" : "Auto"
+					);
+			}
 #else
 			m_vulkan1Dll = bx::dlopen(
 #	if BX_PLATFORM_WINDOWS
