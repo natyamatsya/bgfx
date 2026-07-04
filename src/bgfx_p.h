@@ -25,6 +25,31 @@
 
 #include <inttypes.h>
 
+// Newer SDKs (notably the macOS 26+/Xcode 27 SDK) and the vendored metal-cpp
+// wrapper reference INFINITY / DBL_MAX without including the C math headers
+// themselves, relying on transitive includes the cleaned-up SDK no longer
+// provides. Include them explicitly here so every translation unit has these
+// macros before pulling in framework or vendored headers.
+#include <cfloat>
+#include <cmath>
+
+// Some toolchains (notably Homebrew clang against the macOS 26+/Xcode 27 SDK) do
+// not surface the C macros INFINITY / NAN / FLT_MAX / DBL_MAX through the C++
+// <cmath> / <cfloat> headers. Provide them explicitly via compiler builtins so the
+// vendored metal-cpp wrapper and the SDK's own framework headers compile.
+#ifndef INFINITY
+#	define INFINITY __builtin_inff()
+#endif
+#ifndef NAN
+#	define NAN __builtin_nanf("")
+#endif
+#ifndef FLT_MAX
+#	define FLT_MAX __FLT_MAX__
+#endif
+#ifndef DBL_MAX
+#	define DBL_MAX __DBL_MAX__
+#endif
+
 // Check handle, cannot be bgfx::kInvalidHandle and must be valid.
 #define BGFX_CHECK_HANDLE(_desc, _handleAlloc, _handle) \
 	BX_ASSERT(isValid(_handle)                          \
