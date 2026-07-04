@@ -168,6 +168,13 @@ jobs:
           ".build/${{ matrix.bindir }}/bin/geometryc${{ matrix.binsuffix }}" --version
           ".build/${{ matrix.bindir }}/bin/shaderc${{ matrix.binsuffix }}" --version
           ".build/${{ matrix.bindir }}/bin/texturec${{ matrix.binsuffix }}" --version
+      - name: Slang compliance
+        run: |
+          cd bgfx
+          # shaderc dynamically loads libslang from next to its own executable; the dylib
+          # is vendored (macOS arm64), so copy it beside the freshly built shaderc.
+          cp tools/bin/darwin/libslang.dylib ".build/${{ matrix.bindir }}/bin/"
+          python3 tools/shaderc/slang-compliance/run.py --shaderc ".build/${{ matrix.bindir }}/bin/shaderc${{ matrix.binsuffix }}"
   android:
     strategy:
       fail-fast: true
