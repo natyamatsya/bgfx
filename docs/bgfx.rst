@@ -173,6 +173,7 @@ Individual capability flags.
 .. doxygendefine:: BGFX_CAPS_VERTEX_ATTRIB_UINT10
 .. doxygendefine:: BGFX_CAPS_VIDEO_DECODE
 .. doxygendefine:: BGFX_CAPS_VIEWPORT_LAYER_ARRAY
+.. doxygendefine:: BGFX_CAPS_RAY_TRACING
 
 Statistics
 **********

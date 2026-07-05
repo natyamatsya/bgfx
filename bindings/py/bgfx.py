@@ -588,6 +588,7 @@ class CapsFlags(enum.IntFlag):
 	VertexAttribUint10 = 0x200000
 	VideoDecode = 0x400000
 	ViewportLayerArray = 0x800000
+	RayTracing = 0x1000000
 
 class CapsFormatFlags(enum.IntFlag):
 	TextureNone = 0x0

@@ -4960,6 +4960,11 @@ public final class Bgfx {
 		 * Viewport layer is available in vertex shader.
 		 */
 		public static final long ViewportLayerArray = 0x0000000000800000L;
+
+		/**
+		 * Ray tracing is supported.
+		 */
+		public static final long RayTracing = 0x0000000001000000L;
 	}
 
 	/**

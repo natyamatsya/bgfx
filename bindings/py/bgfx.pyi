@@ -1086,6 +1086,8 @@ class CapsFlags(enum.IntFlag):
 	VideoDecode = 0x400000
 	# Viewport layer is available in vertex shader.
 	ViewportLayerArray = 0x800000
+	# Ray tracing is supported.
+	RayTracing = 0x1000000
 
 class CapsFormatFlags(enum.IntFlag):
 	# Texture format is not supported.

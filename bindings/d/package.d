@@ -561,6 +561,7 @@ enum CapFlags: CapFlags_{
 	vertexAttribUint10     = 0x0000_0000_0020_0000, ///Vertex attribute 10_10_10_2 is supported.
 	videoDecode            = 0x0000_0000_0040_0000, ///Hardware video decode is supported.
 	viewportLayerArray     = 0x0000_0000_0080_0000, ///Viewport layer is available in vertex shader.
+	rayTracing             = 0x0000_0000_0100_0000, ///Ray tracing is supported.
 }
 
 alias CapsFormat_ = uint;
