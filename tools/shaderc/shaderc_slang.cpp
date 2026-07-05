@@ -464,6 +464,27 @@ namespace bgfx
 		return true;
 	}
 
+	// RaytracingAccelerationStructure -> an opaque, read-only resource record tagged with
+	// the AccelerationStructure descriptor type. Reflected (not dropped) so a future RT
+	// runtime can bind it by name; its binding is filled by the caller from the SPIR-V.
+	static bool toAccelStructUniform(const SlangDll& _slang, SlangReflectionVariableLayout* _field, Uniform& _un)
+	{
+		SlangReflectionType* type = _slang.TypeLayout_GetType(_slang.VariableLayout_GetTypeLayout(_field) );
+		if (SLANG_ACCELERATION_STRUCTURE != (_slang.Type_GetResourceShape(type) & SLANG_RESOURCE_BASE_SHAPE_MASK) )
+		{
+			return false;
+		}
+
+		_un.num          = 0;
+		_un.regIndex     = 0; // set by the caller from the SPIR-V binding
+		_un.type         = UniformType::Enum(UniformType::End | kUniformReadOnlyBit);
+		_un.regCount     = descriptorTypeToId(bgfx::DescriptorType::AccelerationStructure);
+		_un.texComponent = 0;
+		_un.texDimension = 0;
+		_un.texFormat    = 0;
+		return true;
+	}
+
 	// A *.sh.slang library, read into memory before loading so the loads can be ordered by
 	// dependency (see preloadSlangLibraries) rather than by include-dir/file order.
 	struct SlangLibrary
@@ -1016,12 +1037,12 @@ namespace bgfx
 
 		if (found.empty() )
 		{
-			bx::write(_messageWriter, &err, "Error: the Slang module defines no entry points (mark one with [shader(\"vertex\"|\"fragment\"|\"compute\")]).\n");
+			bx::write(_messageWriter, &err, "Error: the Slang module defines no entry points (mark one with [shader(\"vertex\"|\"fragment\"|\"compute\"|\"raygeneration\"|\"closesthit\"|...)]).\n");
 		}
 		else
 		{
 			bx::write(_messageWriter, &err, "Error: no %s entry point in the Slang module. It defines: %s.\n", stageName(_stage), found.c_str() );
-			bx::write(_messageWriter, &err, "Note: bgfx shaderc maps only vertex, fragment and compute shaders.\n");
+			bx::write(_messageWriter, &err, "Note: check the entry point's [shader(\"...\")] stage matches --type.\n");
 		}
 
 		return false;
@@ -1121,9 +1142,14 @@ namespace bgfx
 					un.regIndex = uint16_t(binding);
 					_uniforms.push_back(un);
 				}
+				else if (toAccelStructUniform(_slang, field, un) )
+				{
+					un.regIndex = uint16_t(binding);
+					_uniforms.push_back(un);
+				}
 				else
 				{
-					// Live resource we do not map (acceleration structure, subpass input, ...).
+					// Live resource we do not map (subpass input, ...).
 					warnUnsupportedGlobal(_messageWriter, _slang, field, name);
 				}
 			}
@@ -1238,24 +1264,25 @@ namespace bgfx
 	{
 		bx::ErrorAssert err;
 
-		if ('f' == _shaderType)
+		// The leading char of the chunk magic is the stage discriminator (isShaderType).
+		// Ray tracing stages have no raster varyings, so both hashes are 0 (like compute).
+		uint32_t magic;
+		switch (_shaderType)
 		{
-			bx::write(_writer, BGFX_CHUNK_MAGIC_FSH, &err);
-			bx::write(_writer, _inputHash, &err);
-			bx::write(_writer, uint32_t(0), &err);
+		case 'f': magic = BGFX_CHUNK_MAGIC_FSH; break;
+		case 'v': magic = BGFX_CHUNK_MAGIC_VSH; break;
+		case 'r': magic = BGFX_CHUNK_MAGIC_RSH; break; // raygeneration
+		case 'i': magic = BGFX_CHUNK_MAGIC_ISH; break; // intersection
+		case 'a': magic = BGFX_CHUNK_MAGIC_ASH; break; // anyhit
+		case 'h': magic = BGFX_CHUNK_MAGIC_HSH; break; // closesthit
+		case 'm': magic = BGFX_CHUNK_MAGIC_MSH; break; // miss
+		case 'l': magic = BGFX_CHUNK_MAGIC_LSH; break; // callable
+		default:  magic = BGFX_CHUNK_MAGIC_CSH; break; // compute
 		}
-		else if ('v' == _shaderType)
-		{
-			bx::write(_writer, BGFX_CHUNK_MAGIC_VSH, &err);
-			bx::write(_writer, uint32_t(0), &err);
-			bx::write(_writer, _outputHash, &err);
-		}
-		else
-		{
-			bx::write(_writer, BGFX_CHUNK_MAGIC_CSH, &err);
-			bx::write(_writer, uint32_t(0), &err);
-			bx::write(_writer, _outputHash, &err);
-		}
+
+		bx::write(_writer, magic, &err);
+		bx::write(_writer, ('f' == _shaderType) ? _inputHash  : uint32_t(0), &err);
+		bx::write(_writer, ('f' == _shaderType) ? uint32_t(0) : _outputHash, &err);
 
 		uint16_t size = writeUniformArray(_writer, _uniforms, 'f' == _shaderType);
 
@@ -1464,12 +1491,22 @@ namespace bgfx
 			return false;
 		}
 
-		const SlangStage targetStage =
-			  'v' == _options.shaderType ? SLANG_STAGE_VERTEX
-			: 'f' == _options.shaderType ? SLANG_STAGE_FRAGMENT
-			:                              SLANG_STAGE_COMPUTE
-			;
+		SlangStage targetStage;
+		switch (_options.shaderType)
+		{
+		case 'v': targetStage = SLANG_STAGE_VERTEX;         break;
+		case 'f': targetStage = SLANG_STAGE_FRAGMENT;       break;
+		case 'r': targetStage = SLANG_STAGE_RAY_GENERATION; break;
+		case 'i': targetStage = SLANG_STAGE_INTERSECTION;   break;
+		case 'a': targetStage = SLANG_STAGE_ANY_HIT;        break;
+		case 'h': targetStage = SLANG_STAGE_CLOSEST_HIT;    break;
+		case 'm': targetStage = SLANG_STAGE_MISS;           break;
+		case 'l': targetStage = SLANG_STAGE_CALLABLE;       break;
+		default:  targetStage = SLANG_STAGE_COMPUTE;        break;
+		}
 
+		// Raster/compute + RT stages all bind bgfx's UBO at the vertex slot except the
+		// fragment stage, which uses the fragment slot (matching the SPIR-V backend).
 		const int32_t uboBinding = ('f' == _options.shaderType) ? kSpirvFragmentBinding : kSpirvVertexBinding;
 
 		Slang::ComPtr<slang::ISession> session = createSlangSession(global, uboBinding, _messageWriter);
