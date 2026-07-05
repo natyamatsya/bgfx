@@ -1232,9 +1232,11 @@ namespace bgfx
 		}
 	}
 
-	// Writes the compiled-shader envelope (header + uniform table + code + attribute table
-	// + cbuffer size), matching the layout shaderc.cpp / the SPIR-V backend produce.
-	static void writeEnvelope(bx::WriterI* _writer, char _shaderType, const UniformArray& _uniforms, slang::IBlob* _spirv, const std::vector<uint16_t>& _attrIds, uint32_t _inputHash, uint32_t _outputHash)
+	// Writes the envelope header: chunk magic + the input/output varying hashes. The
+	// stock front-end writes this in shaderc.cpp before dispatch; the Slang front-end
+	// bypasses that dispatch, so it writes the header itself -- shared by the SPIR-V and
+	// Metal bodies below.
+	static void writeEnvelopeHeader(bx::WriterI* _writer, char _shaderType, uint32_t _inputHash, uint32_t _outputHash)
 	{
 		bx::ErrorAssert err;
 
@@ -1256,6 +1258,16 @@ namespace bgfx
 			bx::write(_writer, uint32_t(0), &err);
 			bx::write(_writer, _outputHash, &err);
 		}
+	}
+
+	// Writes the SPIR-V (Vulkan) compiled-shader envelope (header + uniform table + code
+	// + attribute table + cbuffer size), matching the layout shaderc.cpp / the SPIR-V
+	// backend produce.
+	static void writeEnvelope(bx::WriterI* _writer, char _shaderType, const UniformArray& _uniforms, slang::IBlob* _spirv, const std::vector<uint16_t>& _attrIds, uint32_t _inputHash, uint32_t _outputHash)
+	{
+		bx::ErrorAssert err;
+
+		writeEnvelopeHeader(_writer, _shaderType, _inputHash, _outputHash);
 
 		uint16_t size = writeUniformArray(_writer, _uniforms, 'f' == _shaderType);
 
@@ -1445,10 +1457,19 @@ namespace bgfx
 		return preamble + "#line 1\n" + _code;
 	}
 
-	bool compileSlangShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _shaderWriter, bx::WriterI* _messageWriter)
+	bool compileSlangShader(const Options& _options, uint32_t _version, ShadingLang::Enum _targetLang, const std::string& _code, bx::WriterI* _shaderWriter, bx::WriterI* _messageWriter)
 	{
-		BX_UNUSED(_version);
 		bx::Error messageErr;      // diagnostics to _messageWriter (must not assert)
+
+		// The Slang front-end drives Slang -> SPIR-V; from that one SPIR-V blob it emits
+		// either the SPIR-V/Vulkan envelope directly, or the Metal envelope via SPIRV-Cross
+		// (shared with the stock glslang Metal backend). Other targets are not wired yet.
+		if (ShadingLang::SpirV != _targetLang
+		&&  ShadingLang::Metal != _targetLang)
+		{
+			bx::write(_messageWriter, &messageErr, "Error: the Slang front-end currently supports only the SPIR-V and Metal targets.\n");
+			return false;
+		}
 
 		SlangDll slang = load(_messageWriter);
 		if (NULL == slang.dll.ptr)
@@ -1533,6 +1554,20 @@ namespace bgfx
 		uint32_t outputHash = 0;
 		computeVaryingHashes(slang, epReflect, _options.shaderType, inputHash, outputHash);
 
+		if (ShadingLang::Metal == _targetLang)
+		{
+			// Metal: reuse the identical reflection (uniform table + attributes) and hand
+			// the bgfx-convention SPIR-V to the shared SPIRV-Cross MSL emitter, which the
+			// stock glslang Metal backend also uses. Only the code blob (MSL text) and the
+			// constant-buffer size convention differ from the SPIR-V envelope.
+			writeEnvelopeHeader(_shaderWriter, _options.shaderType, inputHash, outputHash);
+
+			const uint32_t* words = (const uint32_t*)spirvBlob->getBufferPointer();
+			std::vector<uint32_t> spirv(words, words + spirvBlob->getBufferSize() / sizeof(uint32_t) );
+
+			return compileMetalShaderFromSpirv(_options, _version, spirv, uniforms, attrIds, _shaderWriter, _messageWriter);
+		}
+
 		writeEnvelope(_shaderWriter, _options.shaderType, uniforms, spirvBlob, attrIds, inputHash, outputHash);
 
 		return true;
@@ -1546,9 +1581,9 @@ namespace bgfx
 
 namespace bgfx
 {
-	bool compileSlangShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _shaderWriter, bx::WriterI* _messageWriter)
+	bool compileSlangShader(const Options& _options, uint32_t _version, ShadingLang::Enum _targetLang, const std::string& _code, bx::WriterI* _shaderWriter, bx::WriterI* _messageWriter)
 	{
-		BX_UNUSED(_options, _version, _code, _shaderWriter);
+		BX_UNUSED(_options, _version, _targetLang, _code, _shaderWriter);
 		bx::write(_messageWriter, bx::ErrorIgnore{}, "Slang shader support is not compiled in (vendor 3rdparty/slang to enable).\n");
 		return false;
 	}

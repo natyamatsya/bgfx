@@ -24,22 +24,7 @@ namespace bgfx
 {
 	bool g_verbose = false;
 
-	struct ShadingLang
-	{
-		enum Enum
-		{
-			ESSL,
-			GLSL,
-			HLSL,
-			Metal,
-			PSSL,
-			SpirV,
-			WGSL,
-			Dxil,
-
-			Count
-		};
-	};
+	// ShadingLang lives in shaderc.h (shared with the Slang front-end for target routing).
 
 	static const char* s_shadingLangName[] =
 	{
@@ -1156,7 +1141,7 @@ namespace bgfx
 		if (_options.slang)
 		{
 			BX_UNUSED(_varying, _comment);
-			return compileSlangShader(_options, profile->id, std::string(_shader, _shaderLen), _shaderWriter, _messageWriter);
+			return compileSlangShader(_options, profile->id, profile->lang, std::string(_shader, _shaderLen), _shaderWriter, _messageWriter);
 		}
 
 		// ESSL is compiled as desktop GLSL, and cross-compiled back down to the
