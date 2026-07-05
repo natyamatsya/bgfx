@@ -737,6 +737,9 @@ pub const CapsFlags_VideoDecode: CapsFlags            = 0x0000000200000000;
 /// Viewport layer is available in vertex shader.
 pub const CapsFlags_ViewportLayerArray: CapsFlags     = 0x0000000400000000;
 
+/// Ray tracing is supported.
+pub const CapsFlags_RayTracing: CapsFlags             = 0x0000000800000000;
+
 /// All texture compare modes are supported.
 pub const CapsFlags_TextureCompareAll: CapsFlags      = 0x0000000000180000;
 

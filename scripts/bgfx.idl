@@ -404,6 +404,7 @@ flag.Caps { bits = 64, base = 1, name = "Caps", section = "Available Caps" }
 	.VertexId               --- Rendering with VertexID only is supported.
 	.VideoDecode            --- Hardware video decode is supported.
 	.ViewportLayerArray     --- Viewport layer is available in vertex shader.
+	.RayTracing             --- Ray tracing is supported.
 
 	.TextureCompareAll      --- All texture compare modes are supported.
 	 { "TextureCompareReserved", "TextureCompareLequal" }

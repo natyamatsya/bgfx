@@ -1196,6 +1196,11 @@ public static partial class bgfx
 		ViewportLayerArray     = 0x0000000400000000,
 	
 		/// <summary>
+		/// Ray tracing is supported.
+		/// </summary>
+		RayTracing             = 0x0000000800000000,
+	
+		/// <summary>
 		/// All texture compare modes are supported.
 		/// </summary>
 		TextureCompareAll      = 0x0000000000180000,

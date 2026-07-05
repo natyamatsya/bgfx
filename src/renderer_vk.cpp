@@ -384,15 +384,22 @@ VK_IMPORT_DEVICE
 			EXT_custom_border_color,
 			EXT_debug_report,
 			EXT_debug_utils,
+			EXT_descriptor_indexing,
 			EXT_line_rasterization,
 			EXT_memory_budget,
 			EXT_shader_viewport_index_layer,
 			EXT_surface_maintenance1,
 			EXT_swapchain_maintenance1,
+			KHR_acceleration_structure,
+			KHR_buffer_device_address,
+			KHR_deferred_host_operations,
 			KHR_draw_indirect_count,
 			KHR_fragment_shading_rate,
 			KHR_get_physical_device_properties2,
 			KHR_get_surface_capabilities2,
+			KHR_ray_query,
+			KHR_ray_tracing_pipeline,
+			KHR_spirv_1_4,
 			KHR_video_queue,
 			KHR_video_decode_queue,
 			KHR_video_decode_h264,
@@ -433,15 +440,22 @@ VK_IMPORT_DEVICE
 		{ "VK_EXT_custom_border_color",             1, false, false, true,                                                          Layer::Count },
 		{ "VK_EXT_debug_report",                    1, false, false, false,                                                         Layer::Count },
 		{ "VK_EXT_debug_utils",                     1, false, false, BGFX_CONFIG_DEBUG_OBJECT_NAME || BGFX_CONFIG_DEBUG_ANNOTATION, Layer::Count },
+		{ "VK_EXT_descriptor_indexing",             1, false, false, false,                                                         Layer::Count },
 		{ "VK_EXT_line_rasterization",              1, false, false, true,                                                          Layer::Count },
 		{ "VK_EXT_memory_budget",                   1, false, false, true,                                                          Layer::Count },
 		{ "VK_EXT_shader_viewport_index_layer",     1, false, false, true,                                                          Layer::Count },
 		{ "VK_EXT_surface_maintenance1",            1, false, false, true,                                                          Layer::Count },
 		{ "VK_EXT_swapchain_maintenance1",          1, false, false, true,                                                          Layer::Count },
+		{ "VK_KHR_acceleration_structure",          1, false, false, false,                                                         Layer::Count },
+		{ "VK_KHR_buffer_device_address",           1, false, false, false,                                                         Layer::Count },
+		{ "VK_KHR_deferred_host_operations",        1, false, false, false,                                                         Layer::Count },
 		{ "VK_KHR_draw_indirect_count",             1, false, false, true,                                                          Layer::Count },
 		{ "VK_KHR_fragment_shading_rate",           1, false, false, true,                                                          Layer::Count },
 		{ "VK_KHR_get_physical_device_properties2", 1, false, false, true,                                                          Layer::Count },
 		{ "VK_KHR_get_surface_capabilities2",       1, false, false, true,                                                          Layer::Count },
+		{ "VK_KHR_ray_query",                       1, false, false, false,                                                         Layer::Count },
+		{ "VK_KHR_ray_tracing_pipeline",            1, false, false, false,                                                         Layer::Count },
+		{ "VK_KHR_spirv_1_4",                       1, false, false, false,                                                         Layer::Count },
 		{ "VK_KHR_video_queue",                     1, false, false, true,                                                          Layer::Count },
 		{ "VK_KHR_video_decode_queue",              1, false, false, true,                                                          Layer::Count },
 		{ "VK_KHR_video_decode_h264",               1, false, false, true,                                                          Layer::Count },
@@ -1324,6 +1338,11 @@ VK_IMPORT_DEVICE
 			VkPhysicalDeviceCustomBorderColorFeaturesEXT customBorderColorFeatures = {};
 			VkPhysicalDeviceFragmentShadingRateFeaturesKHR fragmentShadingRate = {};
 			VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchainMaintenance1Features = {};
+			VkPhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures = {};
+			VkPhysicalDeviceBufferDeviceAddressFeaturesKHR bufferDeviceAddressFeatures = {};
+			VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures = {};
+			VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures = {};
+			VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures = {};
 
 			m_fbh = BGFX_INVALID_HANDLE;
 			bx::memSet(m_uniforms, 0, sizeof(m_uniforms) );
@@ -1861,6 +1880,130 @@ VK_IMPORT_INSTANCE
 					}
 				}
 
+				// Ray tracing. Requested opt-in via BGFX_CAPS_RAY_TRACING (default on).
+				// Fully gated: on hardware/drivers that do not expose the whole
+				// acceleration-structure stack (its hard deps VK_EXT_descriptor_indexing,
+				// VK_KHR_buffer_device_address, VK_KHR_deferred_host_operations,
+				// VK_KHR_spirv_1_4 and at least one of ray query / ray tracing pipeline)
+				// this entire block is skipped, nothing is enabled at device creation,
+				// and the capability is not advertised. Older GPUs are unaffected.
+				if (0 != (_init.capabilities & BGFX_CAPS_RAY_TRACING)
+				&&  NULL != vkGetPhysicalDeviceFeatures2KHR
+				&&  s_extension[Extension::EXT_descriptor_indexing     ].m_supported
+				&&  s_extension[Extension::KHR_buffer_device_address   ].m_supported
+				&&  s_extension[Extension::KHR_deferred_host_operations].m_supported
+				&&  s_extension[Extension::KHR_spirv_1_4               ].m_supported
+				&&  s_extension[Extension::KHR_acceleration_structure  ].m_supported
+				&& (s_extension[Extension::KHR_ray_query].m_supported || s_extension[Extension::KHR_ray_tracing_pipeline].m_supported) )
+				{
+					VkPhysicalDeviceFeatures2KHR deviceFeatures2;
+					deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR;
+					deviceFeatures2.pNext = NULL;
+
+					VkBaseOutStructure* next = (VkBaseOutStructure*)&deviceFeatures2;
+
+					next->pNext = (VkBaseOutStructure*)&descriptorIndexingFeatures;
+					next = (VkBaseOutStructure*)&descriptorIndexingFeatures;
+					descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+					descriptorIndexingFeatures.pNext = NULL;
+
+					next->pNext = (VkBaseOutStructure*)&bufferDeviceAddressFeatures;
+					next = (VkBaseOutStructure*)&bufferDeviceAddressFeatures;
+					bufferDeviceAddressFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR;
+					bufferDeviceAddressFeatures.pNext = NULL;
+
+					next->pNext = (VkBaseOutStructure*)&accelerationStructureFeatures;
+					next = (VkBaseOutStructure*)&accelerationStructureFeatures;
+					accelerationStructureFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+					accelerationStructureFeatures.pNext = NULL;
+
+					if (s_extension[Extension::KHR_ray_query].m_supported)
+					{
+						next->pNext = (VkBaseOutStructure*)&rayQueryFeatures;
+						next = (VkBaseOutStructure*)&rayQueryFeatures;
+						rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+						rayQueryFeatures.pNext = NULL;
+					}
+
+					if (s_extension[Extension::KHR_ray_tracing_pipeline].m_supported)
+					{
+						next->pNext = (VkBaseOutStructure*)&rayTracingPipelineFeatures;
+						next = (VkBaseOutStructure*)&rayTracingPipelineFeatures;
+						rayTracingPipelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+						rayTracingPipelineFeatures.pNext = NULL;
+					}
+
+					vkGetPhysicalDeviceFeatures2KHR(m_physicalDevice, &deviceFeatures2);
+
+					const bool rayQueryReady           = s_extension[Extension::KHR_ray_query           ].m_supported && rayQueryFeatures.rayQuery;
+					const bool rayTracingPipelineReady = s_extension[Extension::KHR_ray_tracing_pipeline ].m_supported && rayTracingPipelineFeatures.rayTracingPipeline;
+
+					const bool rayTracingSupported = true
+						&& accelerationStructureFeatures.accelerationStructure
+						&& bufferDeviceAddressFeatures.bufferDeviceAddress
+						&& (rayQueryReady || rayTracingPipelineReady)
+						;
+
+					if (rayTracingSupported)
+					{
+						// Chain the acceleration-structure stack + hard deps into device
+						// creation, forcing on the bits bgfx requires. descriptor indexing
+						// keeps whatever the driver reported as supported.
+						descriptorIndexingFeatures.pNext = (VkBaseOutStructure*)nextFeatures;
+						nextFeatures = &descriptorIndexingFeatures;
+
+						bufferDeviceAddressFeatures.pNext = (VkBaseOutStructure*)nextFeatures;
+						bufferDeviceAddressFeatures.bufferDeviceAddress = VK_TRUE;
+						nextFeatures = &bufferDeviceAddressFeatures;
+
+						accelerationStructureFeatures.pNext = (VkBaseOutStructure*)nextFeatures;
+						accelerationStructureFeatures.accelerationStructure = VK_TRUE;
+						nextFeatures = &accelerationStructureFeatures;
+
+						s_extension[Extension::EXT_descriptor_indexing     ].m_initialize = true;
+						s_extension[Extension::KHR_buffer_device_address   ].m_initialize = true;
+						s_extension[Extension::KHR_deferred_host_operations].m_initialize = true;
+						s_extension[Extension::KHR_spirv_1_4               ].m_initialize = true;
+						s_extension[Extension::KHR_acceleration_structure  ].m_initialize = true;
+
+						if (rayQueryReady)
+						{
+							rayQueryFeatures.pNext = (VkBaseOutStructure*)nextFeatures;
+							rayQueryFeatures.rayQuery = VK_TRUE;
+							nextFeatures = &rayQueryFeatures;
+							s_extension[Extension::KHR_ray_query].m_initialize = true;
+						}
+						else
+						{
+							s_extension[Extension::KHR_ray_query].m_supported = false;
+						}
+
+						if (rayTracingPipelineReady)
+						{
+							rayTracingPipelineFeatures.pNext = (VkBaseOutStructure*)nextFeatures;
+							rayTracingPipelineFeatures.rayTracingPipeline = VK_TRUE;
+							nextFeatures = &rayTracingPipelineFeatures;
+							s_extension[Extension::KHR_ray_tracing_pipeline].m_initialize = true;
+						}
+						else
+						{
+							s_extension[Extension::KHR_ray_tracing_pipeline].m_supported = false;
+						}
+					}
+					else
+					{
+						s_extension[Extension::KHR_acceleration_structure ].m_supported = false;
+						s_extension[Extension::KHR_ray_query              ].m_supported = false;
+						s_extension[Extension::KHR_ray_tracing_pipeline   ].m_supported = false;
+					}
+				}
+				else
+				{
+					s_extension[Extension::KHR_acceleration_structure ].m_supported = false;
+					s_extension[Extension::KHR_ray_query              ].m_supported = false;
+					s_extension[Extension::KHR_ray_tracing_pipeline   ].m_supported = false;
+				}
+
 				m_deviceFeatures =
 				{
 					.robustBufferAccess                      = true
@@ -1987,6 +2130,7 @@ VK_IMPORT_INSTANCE
 					| (s_extension[Extension::EXT_shader_viewport_index_layer].m_supported ? BGFX_CAPS_VIEWPORT_LAYER_ARRAY : 0)
 					| (s_extension[Extension::KHR_draw_indirect_count        ].m_supported && indirectDrawSupport ? BGFX_CAPS_DRAW_INDIRECT_COUNT : 0)
 					| (s_extension[Extension::KHR_fragment_shading_rate      ].m_supported ? BGFX_CAPS_VARIABLE_RATE_SHADING : 0)
+					| (s_extension[Extension::KHR_acceleration_structure     ].m_supported ? BGFX_CAPS_RAY_TRACING          : 0)
 					;
 
 				m_variableRateShadingSupported = true

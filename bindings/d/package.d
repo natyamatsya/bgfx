@@ -533,6 +533,7 @@ enum CapFlags: CapFlags_{
 	vertexID                = 0x0000_0001_0000_0000, ///Rendering with VertexID only is supported.
 	videoDecode             = 0x0000_0002_0000_0000, ///Hardware video decode is supported.
 	viewportLayerArray      = 0x0000_0004_0000_0000, ///Viewport layer is available in vertex shader.
+	rayTracing              = 0x0000_0008_0000_0000, ///Ray tracing is supported.
 	textureCompareAll       = 0x0000_0000_0018_0000, ///All texture compare modes are supported.
 }
 
