@@ -2918,6 +2918,11 @@ namespace bgfx
 			destroyVertexBufferInternal(_frame->m_freeVertexBuffer.get(ii));
 		}
 
+		for (uint16_t ii = 0, num = _frame->m_freeAccelerationStructure.getNumQueued(); ii < num; ++ii)
+		{
+			destroyAccelerationStructureInternal(_frame->m_freeAccelerationStructure.get(ii));
+		}
+
 		for (uint16_t ii = 0, num = _frame->m_freeVertexLayout.getNumQueued(); ii < num; ++ii)
 		{
 			m_layoutHandle.free(_frame->m_freeVertexLayout.get(ii).idx);
@@ -4050,6 +4055,37 @@ namespace bgfx
 				}
 				break;
 
+			case CommandBuffer::CreateBlas:
+				{
+					BGFX_PROFILER_SCOPE("CreateBlas", kColorResource);
+
+					AccelerationStructureHandle handle;
+					_cmdbuf.read(handle);
+
+					VertexBufferHandle vertexBuffer;
+					_cmdbuf.read(vertexBuffer);
+
+					IndexBufferHandle indexBuffer;
+					_cmdbuf.read(indexBuffer);
+
+					m_renderCtx->createBlas(handle, vertexBuffer, indexBuffer);
+				}
+				break;
+
+			case CommandBuffer::CreateTlas:
+				{
+					BGFX_PROFILER_SCOPE("CreateTlas", kColorResource);
+
+					AccelerationStructureHandle handle;
+					_cmdbuf.read(handle);
+
+					AccelerationStructureHandle blas;
+					_cmdbuf.read(blas);
+
+					m_renderCtx->createTlas(handle, blas);
+				}
+				break;
+
 			case CommandBuffer::DestroyVertexBuffer:
 				{
 					BGFX_PROFILER_SCOPE("DestroyVertexBuffer", kColorResource);
@@ -4058,6 +4094,17 @@ namespace bgfx
 					_cmdbuf.read(handle);
 
 					m_renderCtx->destroyVertexBuffer(handle);
+				}
+				break;
+
+			case CommandBuffer::DestroyAccelerationStructure:
+				{
+					BGFX_PROFILER_SCOPE("DestroyAccelerationStructure", kColorResource);
+
+					AccelerationStructureHandle handle;
+					_cmdbuf.read(handle);
+
+					m_renderCtx->destroyAccelerationStructure(handle);
 				}
 				break;
 
@@ -5208,6 +5255,13 @@ namespace bgfx
 		BGFX_ENCODER(setImage(_stage, _handle, _firstLayer, _numLayers, _mip, _access, _format) );
 	}
 
+	void Encoder::setAccelerationStructure(uint8_t _stage, AccelerationStructureHandle _handle)
+	{
+		BX_ASSERT(_stage < g_caps.limits.maxComputeBindings, "Invalid stage %d (max %d).", _stage, g_caps.limits.maxComputeBindings);
+		BGFX_CHECK_HANDLE_INVALID_OK("setAccelerationStructure", s_ctx->m_accelerationStructureHandle, _handle);
+		BGFX_ENCODER(setAccelerationStructure(_stage, _handle) );
+	}
+
 	void Encoder::dispatch(ViewId _id, ProgramHandle _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags)
 	{
 		BGFX_CHECK_CAPS(BGFX_CAPS_COMPUTE, "Compute is not supported!");
@@ -5833,6 +5887,23 @@ namespace bgfx
 	void destroy(VertexBufferHandle _handle)
 	{
 		s_ctx->destroyVertexBuffer(_handle);
+	}
+
+	AccelerationStructureHandle createBlas(VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer)
+	{
+		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING, "Ray tracing is not supported!");
+		return s_ctx->createBlas(_vertexBuffer, _indexBuffer);
+	}
+
+	AccelerationStructureHandle createTlas(AccelerationStructureHandle _blas)
+	{
+		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING, "Ray tracing is not supported!");
+		return s_ctx->createTlas(_blas);
+	}
+
+	void destroy(AccelerationStructureHandle _handle)
+	{
+		s_ctx->destroyAccelerationStructure(_handle);
 	}
 
 	DynamicIndexBufferHandle createDynamicIndexBuffer(uint32_t _num, uint16_t _flags)
@@ -7619,6 +7690,12 @@ namespace bgfx
 	{
 		BGFX_CHECK_ENCODER0();
 		s_ctx->m_encoder0->setImage(_stage, _handle, _firstLayer, _numLayers, _mip, _access, _format);
+	}
+
+	void setAccelerationStructure(uint8_t _stage, AccelerationStructureHandle _handle)
+	{
+		BGFX_CHECK_ENCODER0();
+		s_ctx->m_encoder0->setAccelerationStructure(_stage, _handle);
 	}
 
 	void dispatch(ViewId _id, ProgramHandle _handle, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags)
