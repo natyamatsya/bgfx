@@ -24,27 +24,24 @@ all:
 	@echo "  TARGET=7 (spirv)"
 	@echo "  TARGET=8 (wgsl)"
 
+# Backends to build shaders for. Override per-example -- e.g. Slang shaders currently
+# target only Metal (5) and SPIR-V (7), so those examples set SHADER_TARGETS := 5 7.
+SHADER_TARGETS ?= 3 4 5 7
+ifeq ($(OS), windows)
+SHADER_TARGETS := 0 1 $(SHADER_TARGETS)
+endif
+
 .PHONY: build
 build:
-ifeq ($(OS), windows)
-	@make -s --no-print-directory TARGET=0 all
-	@make -s --no-print-directory TARGET=1 all
-endif
-	@make -s --no-print-directory TARGET=3 all
-	@make -s --no-print-directory TARGET=4 all
-	@make -s --no-print-directory TARGET=5 all
-	@make -s --no-print-directory TARGET=7 all
+	@for target in $(SHADER_TARGETS) ; do \
+		make -s --no-print-directory TARGET=$$target all || exit 1 ; \
+	done
 
 .PHONY: clean
 clean:
-ifeq ($(OS), windows)
-	@make -s --no-print-directory TARGET=0 clean
-	@make -s --no-print-directory TARGET=1 clean
-endif
-	@make -s --no-print-directory TARGET=3 clean
-	@make -s --no-print-directory TARGET=4 clean
-	@make -s --no-print-directory TARGET=5 clean
-	@make -s --no-print-directory TARGET=7 clean
+	@for target in $(SHADER_TARGETS) ; do \
+		make -s --no-print-directory TARGET=$$target clean || exit 1 ; \
+	done
 
 .PHONY: rebuild
 rebuild: clean build
@@ -117,13 +114,15 @@ CS_FLAGS+=-i $(THISDIR)../src/ $(ADDITIONAL_INCLUDES)
 BUILD_OUTPUT_DIR=$(addprefix ./, $(RUNTIME_DIR)/$(SHADER_PATH))
 BUILD_INTERMEDIATE_DIR=$(addprefix $(BUILD_DIR)/, $(SHADER_PATH))
 
-VS_SOURCES=$(notdir $(wildcard $(addprefix $(SHADERS_DIR), vs_*.sc)))
+# Sources may be bgfx-flavored GLSL (*.sc) or Slang (*.slang); shaderc picks the front-end
+# by extension. Both produce the same <name>.bin, so an example uses one or the other.
+VS_SOURCES=$(notdir $(wildcard $(addprefix $(SHADERS_DIR), vs_*.sc) $(addprefix $(SHADERS_DIR), vs_*.slang)))
 VS_DEPS=$(addprefix $(BUILD_INTERMEDIATE_DIR)/,$(addsuffix .bin.d, $(basename $(notdir $(VS_SOURCES)))))
 
-FS_SOURCES=$(notdir $(wildcard $(addprefix $(SHADERS_DIR), fs_*.sc)))
+FS_SOURCES=$(notdir $(wildcard $(addprefix $(SHADERS_DIR), fs_*.sc) $(addprefix $(SHADERS_DIR), fs_*.slang)))
 FS_DEPS=$(addprefix $(BUILD_INTERMEDIATE_DIR)/,$(addsuffix .bin.d, $(basename $(notdir $(FS_SOURCES)))))
 
-CS_SOURCES=$(notdir $(wildcard $(addprefix $(SHADERS_DIR), cs_*.sc)))
+CS_SOURCES=$(notdir $(wildcard $(addprefix $(SHADERS_DIR), cs_*.sc) $(addprefix $(SHADERS_DIR), cs_*.slang)))
 CS_DEPS=$(addprefix $(BUILD_INTERMEDIATE_DIR)/,$(addsuffix .bin.d, $(basename $(notdir $(CS_SOURCES)))))
 
 VS_BIN = $(addprefix $(BUILD_INTERMEDIATE_DIR)/, $(addsuffix .bin, $(basename $(notdir $(VS_SOURCES)))))
@@ -151,6 +150,23 @@ $(BUILD_INTERMEDIATE_DIR)/fs_%.bin: $(SHADERS_DIR)fs_%.sc
 $(BUILD_INTERMEDIATE_DIR)/cs_%.bin: $(SHADERS_DIR)cs_%.sc
 	@echo [$(<)]
 	$(SILENT) $(SHADERC) $(CS_FLAGS) --type compute --depends -o $(@) -f $(<) --disasm
+	$(SILENT) cp $(@) $(BUILD_OUTPUT_DIR)/$(@F)
+
+# Slang rules. shaderc infers --lang slang from the .slang extension. Slang bypasses the
+# fcpp preprocessor, so no --depends/--disasm.
+$(BUILD_INTERMEDIATE_DIR)/vs_%.bin: $(SHADERS_DIR)vs_%.slang
+	@echo [$(<)]
+	$(SILENT) $(SHADERC) $(VS_FLAGS) --type vertex -o $(@) -f $(<)
+	$(SILENT) cp $(@) $(BUILD_OUTPUT_DIR)/$(@F)
+
+$(BUILD_INTERMEDIATE_DIR)/fs_%.bin: $(SHADERS_DIR)fs_%.slang
+	@echo [$(<)]
+	$(SILENT) $(SHADERC) $(FS_FLAGS) --type fragment -o $(@) -f $(<)
+	$(SILENT) cp $(@) $(BUILD_OUTPUT_DIR)/$(@F)
+
+$(BUILD_INTERMEDIATE_DIR)/cs_%.bin: $(SHADERS_DIR)cs_%.slang
+	@echo [$(<)]
+	$(SILENT) $(SHADERC) $(CS_FLAGS) --type compute -o $(@) -f $(<)
 	$(SILENT) cp $(@) $(BUILD_OUTPUT_DIR)/$(@F)
 
 .PHONY: all
