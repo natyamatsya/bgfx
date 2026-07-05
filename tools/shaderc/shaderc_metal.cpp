@@ -244,45 +244,7 @@ namespace bgfx { namespace metal
 	// regCount*16 across every record (including samplers) rather than taking the max
 	// over data uniforms. Kept separate to preserve the existing Metal output byte
 	// layout; unify with the shared writer only with Metal round-trip testing.
-	static uint16_t writeUniformArrayMetal(bx::WriterI* _shaderWriter, const UniformArray& uniforms, bool isFragmentShader)
-	{
-		uint16_t size = 0;
-
-		bx::ErrorAssert err;
-
-		RawBindings().write(_shaderWriter, &err);
-
-		uint16_t count = uint16_t(uniforms.size());
-		bx::write(_shaderWriter, count, &err);
-
-		uint32_t fragmentBit = isFragmentShader ? kUniformFragmentBit : 0;
-		for (uint16_t ii = 0; ii < count; ++ii)
-		{
-			const Uniform& un = uniforms[ii];
-
-			size += un.regCount*16;
-
-			uint8_t nameSize = (uint8_t)un.name.size();
-			bx::write(_shaderWriter, nameSize, &err);
-			bx::write(_shaderWriter, un.name.c_str(), nameSize, &err);
-			bx::write(_shaderWriter, uint8_t(un.type | fragmentBit), &err);
-			bx::write(_shaderWriter, un.num, &err);
-			bx::write(_shaderWriter, un.regIndex, &err);
-			bx::write(_shaderWriter, un.regCount, &err);
-			bx::write(_shaderWriter, un.texComponent, &err);
-			bx::write(_shaderWriter, un.texDimension, &err);
-			bx::write(_shaderWriter, un.texFormat, &err);
-
-			BX_TRACE("%s, %s, %d, %d, %d"
-				, un.name.c_str()
-				, getUniformTypeName(un.type)
-				, un.num
-				, un.regIndex
-				, un.regCount
-			);
-		}
-		return size;
-	}
+	// writeUniformArrayMetal now lives in shaderc.h (shared with the Slang Metal path).
 
 	static spv_target_env getSpirvTargetVersion(uint32_t _version, bx::WriterI* _messageWriter)
 	{
@@ -397,10 +359,16 @@ namespace bgfx { namespace metal
 		shader->setEntryPoint("main");
 		shader->setAutoMapBindings(true);
 		shader->setEnvTarget(glslang::EShTargetSpv, getGlslangTargetSpirvVersion(_version, _messageWriter));
-		const int textureBindingOffset = 16;
-		shader->setShiftBinding(glslang::EResTexture, textureBindingOffset);
-		shader->setShiftBinding(glslang::EResSampler, textureBindingOffset);
-		shader->setShiftBinding(glslang::EResImage, textureBindingOffset);
+		// bgfx's canonical SPIR-V binding convention (identical to shaderc_spirv.cpp):
+		// UBO at kSpirv{Vertex,Fragment}Binding, textures/images/SSBO at +kSpirvBindShift,
+		// samplers at +kSpirvBindShift+kSpirvSamplerShift. compileMetalShaderFromSpirv
+		// undoes exactly these shifts when it assigns MSL resource indices, so the stock
+		// glslang path and the Slang path feed it SPIR-V in the same convention.
+		shader->setShiftBinding(glslang::EResUbo,     (stage == EShLanguage::EShLangFragment ? kSpirvFragmentBinding : kSpirvVertexBinding) );
+		shader->setShiftBinding(glslang::EResTexture, kSpirvBindShift);
+		shader->setShiftBinding(glslang::EResSampler, kSpirvBindShift + kSpirvSamplerShift);
+		shader->setShiftBinding(glslang::EResSsbo,    kSpirvBindShift);
+		shader->setShiftBinding(glslang::EResImage,   kSpirvBindShift);
 
 		const char* shaderStrings[] = { _code.c_str() };
 		shader->setStrings(
@@ -584,8 +552,10 @@ namespace bgfx { namespace metal
 							un.regCount *= 4;
 							break;
 						default:
-							un.type = UniformType::End;
-							break;
+							// Not a bgfx uniform type (e.g. glslang's split combined-sampler
+							// halves s_xxxTexture / s_xxxSampler). Skip, matching the SPIR-V
+							// path -- resource records come from reflectSpirvResourceUniforms.
+							continue;
 						}
 
 						uniforms.push_back(un);
@@ -643,187 +613,29 @@ namespace bgfx { namespace metal
 						glslang::SpirvToolsDisassemble(std::cout, spirv, getSpirvTargetVersion(_version, _messageWriter));
 					}
 
-					spirv_cross::CompilerReflection refl(spirv);
-					spirv_cross::ShaderResources resourcesrefl = refl.get_shader_resources();
+					// Sampler / storage-image / storage-buffer records, identical to the
+					// SPIR-V backend's (rich texComponent/Dimension/Format + compare-bit),
+					// so the Metal envelope's reflection matches the SPIR-V envelope's.
+					reflectSpirvResourceUniforms(spirv, uniforms);
 
-					// Loop through the separate_images, and extract the uniform names:
-					for (auto& resource : resourcesrefl.separate_images)
-					{
-						std::string name = refl.get_name(resource.id);
-						if (name.size() > 7 && 0 == bx::strCmp(name.c_str() + name.length() - 7, "Texture"))
-						{
-							name = name.substr(0, name.length() - 7);
-						}
-
-						const spirv_cross::SPIRType& type = refl.get_type(resource.type_id);
-
-						Uniform un;
-						un.name = name;
-						un.type = UniformType::Sampler;
-
-						un.num = 0;			// needed?
-						un.regIndex = 0;	// needed?
-						un.regCount = 0;	// needed?
-						un.texDimension = spirvDimToTextureDimensionId(uint32_t(type.image.dim), type.image.arrayed);
-
-						uniforms.push_back(un);
-					}
-
-					uint16_t size = writeUniformArrayMetal(_shaderWriter, uniforms, _options.shaderType == 'f');
-
-					bx::Error err;
-
-					spirv_cross::CompilerMSL msl(std::move(spirv) );
-
-					// Configure MSL cross compiler
-					spirv_cross::CompilerMSL::Options mslOptions = msl.get_msl_options();
-					{
-						// - Platform
-						mslOptions.platform = getMslPlatform(_options.platform);
-
-						// - MSL Version
-						uint32_t major, minor;
-						getMSLVersion(_version, major, minor, _messageWriter);
-						mslOptions.set_msl_version(major, minor);
-					}
-					msl.set_msl_options(mslOptions);
-
-					auto executionModel = msl.get_execution_model();
-					spirv_cross::MSLResourceBinding newBinding;
-					newBinding.stage = executionModel;
-
-					spirv_cross::ShaderResources resources = msl.get_shader_resources();
-
-					spirv_cross::SmallVector<spirv_cross::EntryPoint> entryPoints = msl.get_entry_points_and_stages();
-					if (!entryPoints.empty() )
-					{
-						msl.rename_entry_point(
-							entryPoints[0].name
-							, "xlatMtlMain"
-							, entryPoints[0].execution_model
-							);
-					}
-
-					for (auto& resource : resources.uniform_buffers)
-					{
-						unsigned set     = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
-						unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);
-						newBinding.desc_set   = set;
-						newBinding.binding    = binding;
-						newBinding.msl_buffer = 0;
-						msl.add_msl_resource_binding(newBinding);
-
-						msl.set_name(resource.id, "_mtl_u");
-					}
-
-					for (auto& resource : resources.storage_buffers)
-					{
-						unsigned set     = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
-						unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);
-						newBinding.desc_set   = set;
-						newBinding.binding    = binding;
-						newBinding.msl_buffer = binding + 1;
-						msl.add_msl_resource_binding(newBinding);
-					}
-
-					for (auto& resource : resources.separate_samplers)
-					{
-						unsigned set     = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
-						unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);
-						newBinding.desc_set    = set;
-						newBinding.binding     = binding;
-						newBinding.msl_texture = binding - textureBindingOffset;
-						newBinding.msl_sampler = binding - textureBindingOffset;
-						msl.add_msl_resource_binding(newBinding);
-					}
-
-					for (auto& resource : resources.separate_images)
-					{
-						std::string name = msl.get_name(resource.id);
-						if (name.size() > 7 && 0 == bx::strCmp(name.c_str() + name.length() - 7, "Texture") )
-						{
-							msl.set_name(resource.id, name.substr(0, name.length() - 7) );
-						}
-
-						unsigned set     = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
-						unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);
-						newBinding.desc_set    = set;
-						newBinding.binding     = binding;
-						newBinding.msl_texture = binding - textureBindingOffset;
-						newBinding.msl_sampler = binding - textureBindingOffset;
-						msl.add_msl_resource_binding(newBinding);
-					}
-
-					for (auto& resource : resources.storage_images)
-					{
-						std::string name = msl.get_name(resource.id);
-
-						unsigned set     = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
-						unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);
-						newBinding.desc_set    = set;
-						newBinding.binding     = binding;
-						newBinding.msl_texture = binding - textureBindingOffset;
-						newBinding.msl_sampler = binding - textureBindingOffset;
-						msl.add_msl_resource_binding(newBinding);
-					}
-
-					std::string source = msl.compile();
-
-					// fix https://github.com/bkaradzic/bgfx/issues/2822
-					// insert struct member which declares point size, defaulted to 1
+					// Vertex attributes come from glslang's live-attribute reflection; the
+					// SPIR-V -> MSL translation + envelope body is shared with the Slang path.
+					std::vector<uint16_t> attrIds;
 					if ('v' == _options.shaderType)
 					{
-						if (msl.get_writes_to_point_size())
+						const uint8_t numAttr = (uint8_t)program->getNumLiveAttributes();
+						attrIds.reserve(numAttr);
+						for (uint8_t ii = 0; ii < numAttr; ++ii)
 						{
-							if (source.find("[[point_size]]") == std::string::npos)
-							{
-								const bx::StringView xlatMtlMainOut("xlatMtlMain_out\n{");
-								size_t pos = source.find(xlatMtlMainOut.getPtr());
-
-								if (pos != std::string::npos)
-								{
-									pos += xlatMtlMainOut.getLength();
-									source.insert(pos, "\n\tfloat bgfx_metal_pointSize [[point_size]] = 1;");
-								}
-							}
+							bgfx::Attrib::Enum attr = toAttribEnum(program->getAttributeName(ii) );
+							attrIds.push_back(bgfx::Attrib::Count != attr ? bgfx::attribToId(attr) : uint16_t(UINT16_MAX) );
 						}
 					}
 
-					if ('c' == _options.shaderType)
+					if (!compileMetalShaderFromSpirv(_options, _version, spirv, uniforms, attrIds, _shaderWriter, _messageWriter) )
 					{
-						for (int i = 0; i < 3; ++i)
-						{
-							uint16_t dim = (uint16_t)msl.get_execution_mode_argument(
-								spv::ExecutionMode::ExecutionModeLocalSize
-								, i
-								);
-							bx::write(_shaderWriter, dim, &err);
-						}
+						compiled = false;
 					}
-
-					const uint32_t shaderSize = (uint32_t)source.size();
-					bx::write(_shaderWriter, shaderSize, &err);
-					bx::write(_shaderWriter, source.c_str(), shaderSize, &err);
-					const uint8_t nul = 0;
-					bx::write(_shaderWriter, nul, &err);
-
-					const uint8_t numAttr = (uint8_t)program->getNumLiveAttributes();
-					bx::write(_shaderWriter, numAttr, &err);
-
-					for (uint8_t ii = 0; ii < numAttr; ++ii)
-					{
-						bgfx::Attrib::Enum attr = toAttribEnum(program->getAttributeName(ii) );
-						if (bgfx::Attrib::Count != attr)
-						{
-							bx::write(_shaderWriter, bgfx::attribToId(attr), &err);
-						}
-						else
-						{
-							bx::write(_shaderWriter, uint16_t(UINT16_MAX), &err);
-						}
-					}
-
-					bx::write(_shaderWriter, size, &err);
 				}
 			}
 		}
@@ -837,6 +649,141 @@ namespace bgfx { namespace metal
 	}
 
 } // namespace metal
+
+	bool compileMetalShaderFromSpirv(const Options& _options, uint32_t _version, std::vector<uint32_t>& _spirv, const UniformArray& _uniforms, const std::vector<uint16_t>& _attrIds, bx::WriterI* _shaderWriter, bx::WriterI* _messageWriter)
+	{
+		bx::ErrorAssert err;
+
+		// Uniform table (Metal constant-buffer size convention).
+		const uint16_t size = writeUniformArrayMetal(_shaderWriter, _uniforms, 'f' == _options.shaderType);
+
+		spirv_cross::CompilerMSL msl(std::move(_spirv) );
+
+		spirv_cross::CompilerMSL::Options mslOptions = msl.get_msl_options();
+		mslOptions.platform = metal::getMslPlatform(_options.platform);
+		uint32_t major, minor;
+		metal::getMSLVersion(_version, major, minor, _messageWriter);
+		mslOptions.set_msl_version(major, minor);
+		msl.set_msl_options(mslOptions);
+
+		spirv_cross::SmallVector<spirv_cross::EntryPoint> entryPoints = msl.get_entry_points_and_stages();
+		if (!entryPoints.empty() )
+		{
+			msl.rename_entry_point(entryPoints[0].name, "xlatMtlMain", entryPoints[0].execution_model);
+		}
+
+		const spv::ExecutionModel executionModel = msl.get_execution_model();
+		spirv_cross::ShaderResources resources = msl.get_shader_resources();
+
+		// Undo bgfx's canonical SPIR-V binding shifts to recover the MSL resource index:
+		// UBO -> Metal buffer 0 (named "_mtl_u"); storage buffer N -> buffer N+1;
+		// texture/image N -> texture N; sampler N -> sampler N. This mirrors the
+		// setShiftBinding convention metal::compile and shaderc_spirv.cpp both apply.
+		for (auto& resource : resources.uniform_buffers)
+		{
+			spirv_cross::MSLResourceBinding b = {};
+			b.stage      = executionModel;
+			b.desc_set   = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
+			b.binding    = msl.get_decoration(resource.id, spv::DecorationBinding);
+			b.msl_buffer = 0;
+			msl.add_msl_resource_binding(b);
+
+			msl.set_name(resource.id, "_mtl_u");
+		}
+
+		for (auto& resource : resources.storage_buffers)
+		{
+			const unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);
+			spirv_cross::MSLResourceBinding b = {};
+			b.stage      = executionModel;
+			b.desc_set   = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
+			b.binding    = binding;
+			b.msl_buffer = binding - kSpirvBindShift + 1;
+			msl.add_msl_resource_binding(b);
+		}
+
+		for (auto& resource : resources.separate_samplers)
+		{
+			const unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);
+			spirv_cross::MSLResourceBinding b = {};
+			b.stage       = executionModel;
+			b.desc_set    = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
+			b.binding     = binding;
+			b.msl_sampler = binding - kSpirvBindShift - kSpirvSamplerShift;
+			msl.add_msl_resource_binding(b);
+		}
+
+		for (auto& resource : resources.separate_images)
+		{
+			std::string name = msl.get_name(resource.id);
+			if (name.size() > 7 && 0 == bx::strCmp(name.c_str() + name.length() - 7, "Texture") )
+			{
+				msl.set_name(resource.id, name.substr(0, name.length() - 7) );
+			}
+
+			const unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);
+			spirv_cross::MSLResourceBinding b = {};
+			b.stage       = executionModel;
+			b.desc_set    = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
+			b.binding     = binding;
+			b.msl_texture = binding - kSpirvBindShift;
+			msl.add_msl_resource_binding(b);
+		}
+
+		for (auto& resource : resources.storage_images)
+		{
+			const unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);
+			spirv_cross::MSLResourceBinding b = {};
+			b.stage       = executionModel;
+			b.desc_set    = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
+			b.binding     = binding;
+			b.msl_texture = binding - kSpirvBindShift;
+			msl.add_msl_resource_binding(b);
+		}
+
+		std::string source = msl.compile();
+
+		// fix https://github.com/bkaradzic/bgfx/issues/2822
+		// insert struct member which declares point size, defaulted to 1
+		if ('v' == _options.shaderType
+		&&  msl.get_writes_to_point_size()
+		&&  std::string::npos == source.find("[[point_size]]") )
+		{
+			const bx::StringView xlatMtlMainOut("xlatMtlMain_out\n{");
+			const size_t pos = source.find(xlatMtlMainOut.getPtr() );
+			if (std::string::npos != pos)
+			{
+				source.insert(pos + xlatMtlMainOut.getLength(), "\n\tfloat bgfx_metal_pointSize [[point_size]] = 1;");
+			}
+		}
+
+		// Compute threadgroup dimensions trailer (3x u16), before the code blob.
+		if ('c' == _options.shaderType)
+		{
+			for (int ii = 0; ii < 3; ++ii)
+			{
+				const uint16_t dim = (uint16_t)msl.get_execution_mode_argument(spv::ExecutionMode::ExecutionModeLocalSize, ii);
+				bx::write(_shaderWriter, dim, &err);
+			}
+		}
+
+		const uint32_t shaderSize = (uint32_t)source.size();
+		bx::write(_shaderWriter, shaderSize, &err);
+		bx::write(_shaderWriter, source.c_str(), shaderSize, &err);
+		const uint8_t nul = 0;
+		bx::write(_shaderWriter, nul, &err);
+
+		const uint8_t numAttr = (uint8_t)_attrIds.size();
+		bx::write(_shaderWriter, numAttr, &err);
+		for (uint8_t ii = 0; ii < numAttr; ++ii)
+		{
+			bx::write(_shaderWriter, _attrIds[ii], &err);
+		}
+
+		bx::write(_shaderWriter, size, &err);
+
+		return true;
+	}
 
 	bool compileMetalShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _shaderWriter, bx::WriterI* _messageWriter)
 	{
@@ -852,6 +799,14 @@ namespace bgfx
 	bool compileMetalShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _shaderWriter, bx::WriterI* _messageWriter)
 	{
 		BX_UNUSED(_options, _version, _code, _shaderWriter);
+		bx::Error messageErr;
+		bx::write(_messageWriter, &messageErr, "Metal compiler (glslang) is not compiled in.\n");
+		return false;
+	}
+
+	bool compileMetalShaderFromSpirv(const Options& _options, uint32_t _version, std::vector<uint32_t>& _spirv, const UniformArray& _uniforms, const std::vector<uint16_t>& _attrIds, bx::WriterI* _shaderWriter, bx::WriterI* _messageWriter)
+	{
+		BX_UNUSED(_options, _version, _spirv, _uniforms, _attrIds, _shaderWriter);
 		bx::Error messageErr;
 		bx::write(_messageWriter, &messageErr, "Metal compiler (glslang) is not compiled in.\n");
 		return false;
