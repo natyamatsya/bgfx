@@ -269,6 +269,29 @@ BGFX_C_API void bgfx_destroy_vertex_layout(bgfx_vertex_layout_handle_t _layoutHa
 	bgfx::destroy(layoutHandle.cpp);
 }
 
+BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_blas(bgfx_vertex_buffer_handle_t _vertexBuffer, bgfx_index_buffer_handle_t _indexBuffer)
+{
+	union { bgfx_vertex_buffer_handle_t c; bgfx::VertexBufferHandle cpp; } vertexBuffer = { _vertexBuffer };
+	union { bgfx_index_buffer_handle_t c; bgfx::IndexBufferHandle cpp; } indexBuffer = { _indexBuffer };
+	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } handle_ret;
+	handle_ret.cpp = bgfx::createBlas(vertexBuffer.cpp, indexBuffer.cpp);
+	return handle_ret.c;
+}
+
+BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_tlas(bgfx_acceleration_structure_handle_t _blas)
+{
+	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } blas = { _blas };
+	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } handle_ret;
+	handle_ret.cpp = bgfx::createTlas(blas.cpp);
+	return handle_ret.c;
+}
+
+BGFX_C_API void bgfx_destroy_acceleration_structure(bgfx_acceleration_structure_handle_t _handle)
+{
+	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } handle = { _handle };
+	bgfx::destroy(handle.cpp);
+}
+
 BGFX_C_API bgfx_vertex_buffer_handle_t bgfx_create_vertex_buffer(const bgfx_memory_t* _mem, const bgfx_vertex_layout_t * _layout, uint16_t _flags)
 {
 	const bgfx::VertexLayout & layout = *(const bgfx::VertexLayout *)_layout;
@@ -1005,6 +1028,13 @@ BGFX_C_API void bgfx_encoder_set_image_view(bgfx_encoder_t* _this, uint8_t _stag
 	This->setImage(_stage, handle.cpp, _firstLayer, _numLayers, _mip, (bgfx::Access::Enum)_access, (bgfx::TextureFormat::Enum)_format);
 }
 
+BGFX_C_API void bgfx_encoder_set_acceleration_structure(bgfx_encoder_t* _this, uint8_t _stage, bgfx_acceleration_structure_handle_t _handle)
+{
+	bgfx::Encoder* This = (bgfx::Encoder*)_this;
+	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } handle = { _handle };
+	This->setAccelerationStructure(_stage, handle.cpp);
+}
+
 BGFX_C_API void bgfx_encoder_dispatch(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags)
 {
 	bgfx::Encoder* This = (bgfx::Encoder*)_this;
@@ -1290,6 +1320,12 @@ BGFX_C_API void bgfx_set_image_view(uint8_t _stage, bgfx_texture_handle_t _handl
 	bgfx::setImage(_stage, handle.cpp, _firstLayer, _numLayers, _mip, (bgfx::Access::Enum)_access, (bgfx::TextureFormat::Enum)_format);
 }
 
+BGFX_C_API void bgfx_set_acceleration_structure(uint8_t _stage, bgfx_acceleration_structure_handle_t _handle)
+{
+	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } handle = { _handle };
+	bgfx::setAccelerationStructure(_stage, handle.cpp);
+}
+
 BGFX_C_API void bgfx_dispatch(bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags)
 {
 	union { bgfx_program_handle_t c; bgfx::ProgramHandle cpp; } program = { _program };
@@ -1394,6 +1430,9 @@ BGFX_C_API bgfx_interface_vtbl_t* bgfx_get_interface(uint32_t _version)
 			bgfx_destroy_index_buffer,
 			bgfx_create_vertex_layout,
 			bgfx_destroy_vertex_layout,
+			bgfx_create_blas,
+			bgfx_create_tlas,
+			bgfx_destroy_acceleration_structure,
 			bgfx_create_vertex_buffer,
 			bgfx_set_vertex_buffer_name,
 			bgfx_destroy_vertex_buffer,
@@ -1510,6 +1549,7 @@ BGFX_C_API bgfx_interface_vtbl_t* bgfx_get_interface(uint32_t _version)
 			bgfx_encoder_set_compute_indirect_buffer,
 			bgfx_encoder_set_image,
 			bgfx_encoder_set_image_view,
+			bgfx_encoder_set_acceleration_structure,
 			bgfx_encoder_dispatch,
 			bgfx_encoder_dispatch_indirect,
 			bgfx_encoder_discard,
@@ -1558,6 +1598,7 @@ BGFX_C_API bgfx_interface_vtbl_t* bgfx_get_interface(uint32_t _version)
 			bgfx_set_compute_indirect_buffer,
 			bgfx_set_image,
 			bgfx_set_image_view,
+			bgfx_set_acceleration_structure,
 			bgfx_dispatch,
 			bgfx_dispatch_indirect,
 			bgfx_discard,

@@ -2214,6 +2214,10 @@ struct VertexLayout
 // per thread should be used. Use `bgfx::begin()` to obtain an encoder for a thread.
 alias Encoder = any;
 
+struct AccelerationStructureHandle {
+    ushort idx;
+}
+
 struct DynamicIndexBufferHandle {
     ushort idx;
 }
@@ -2518,6 +2522,22 @@ extern fn VertexLayoutHandle create_vertex_layout(VertexLayout* _layout) @cname(
 // Destroy vertex layout.
 // _layoutHandle : `Vertex layout handle.`
 extern fn void destroy_vertex_layout(VertexLayoutHandle _layoutHandle) @cname("bgfx_destroy_vertex_layout");
+
+// Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+// _vertexBuffer : `Vertex buffer with the geometry positions.`
+// _indexBuffer : `Index buffer describing the triangles.`
+extern fn AccelerationStructureHandle create_blas(VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) @cname("bgfx_create_blas");
+
+// Create a top-level acceleration structure (TLAS) with a single BLAS instance
+// (identity transform).
+// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+// _blas : `Bottom-level acceleration structure to instance.`
+extern fn AccelerationStructureHandle create_tlas(AccelerationStructureHandle _blas) @cname("bgfx_create_tlas");
+
+// Destroy acceleration structure.
+// _handle : `Acceleration structure handle.`
+extern fn void destroy_acceleration_structure(AccelerationStructureHandle _handle) @cname("bgfx_destroy_acceleration_structure");
 
 // Create static vertex buffer.
 // _mem : `Vertex buffer data.`
@@ -3480,6 +3500,11 @@ extern fn void encoder_set_image(Encoder* _this, char _stage, TextureHandle _han
 // _format : `Texture format. See: `TextureFormat::Enum`.`
 extern fn void encoder_set_image_view(Encoder* _this, char _stage, TextureHandle _handle, ushort _firstLayer, ushort _numLayers, char _mip, Access _access, TextureFormat _format) @cname("bgfx_encoder_set_image_view");
 
+// Set acceleration structure for compute (ray query).
+// _stage : `Compute stage.`
+// _handle : `Acceleration structure handle.`
+extern fn void encoder_set_acceleration_structure(Encoder* _this, char _stage, AccelerationStructureHandle _handle) @cname("bgfx_encoder_set_acceleration_structure");
+
 // Dispatch compute.
 // _id : `View id.`
 // _program : `Compute program.`
@@ -3917,6 +3942,11 @@ extern fn void set_image(char _stage, TextureHandle _handle, char _mip, Access _
 // _access : `Image access. See `Access::Enum`.`
 // _format : `Texture format. See: `TextureFormat::Enum`.`
 extern fn void set_image_view(char _stage, TextureHandle _handle, ushort _firstLayer, ushort _numLayers, char _mip, Access _access, TextureFormat _format) @cname("bgfx_set_image_view");
+
+// Set acceleration structure for compute (ray query).
+// _stage : `Compute stage.`
+// _handle : `Acceleration structure handle.`
+extern fn void set_acceleration_structure(char _stage, AccelerationStructureHandle _handle) @cname("bgfx_set_acceleration_structure");
 
 // Dispatch compute.
 // _id : `View id.`

@@ -1356,6 +1356,21 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			m_vertexBuffers[_handle.idx].create(_mem->size, _mem->data, _layoutHandle, _flags);
 		}
 
+		void createBlas(AccelerationStructureHandle _handle, VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) override
+		{
+			BX_UNUSED(_handle, _vertexBuffer, _indexBuffer);
+		}
+
+		void createTlas(AccelerationStructureHandle _handle, AccelerationStructureHandle _blas) override
+		{
+			BX_UNUSED(_handle, _blas);
+		}
+
+		void destroyAccelerationStructure(AccelerationStructureHandle _handle) override
+		{
+			BX_UNUSED(_handle);
+		}
+
 		void destroyVertexBuffer(VertexBufferHandle _handle) override
 		{
 			m_vertexBuffers[_handle.idx].destroy();

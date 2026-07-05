@@ -125,6 +125,18 @@ namespace bgfx { namespace noop
 		{
 		}
 
+		void createBlas(AccelerationStructureHandle /*_handle*/, VertexBufferHandle /*_vertexBuffer*/, IndexBufferHandle /*_indexBuffer*/) override
+		{
+		}
+
+		void createTlas(AccelerationStructureHandle /*_handle*/, AccelerationStructureHandle /*_blas*/) override
+		{
+		}
+
+		void destroyAccelerationStructure(AccelerationStructureHandle /*_handle*/) override
+		{
+		}
+
 		void createDynamicIndexBuffer(IndexBufferHandle /*_handle*/, uint32_t /*_size*/, uint16_t /*_flags*/) override
 		{
 		}

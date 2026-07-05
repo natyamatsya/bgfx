@@ -956,6 +956,10 @@ enum RenderFrame: bgfx.impl.RenderFrame.Enum{
 	count = bgfx.impl.RenderFrame.Enum.count,
 }
 
+extern(C++, "bgfx") struct AccelerationStructureHandle{
+	ushort idx;
+}
+
 extern(C++, "bgfx") struct DynamicIndexBufferHandle{
 	ushort idx;
 }
@@ -2111,6 +2115,14 @@ extern(C++, "bgfx") struct Encoder{
 			{q{void}, q{setImage}, q{ubyte stage, TextureHandle handle, ushort firstLayer, ushort numLayers, ubyte mip, bgfx.impl.Access.Enum access, bgfx.impl.TextureFormat.Enum format=TextureFormat.count}, ext: `C++`},
 			
 			/**
+			Set acceleration structure for compute (ray query).
+			Params:
+				stage = Compute stage.
+				handle = Acceleration structure handle.
+			*/
+			{q{void}, q{setAccelerationStructure}, q{ubyte stage, AccelerationStructureHandle handle}, ext: `C++`},
+			
+			/**
 			Dispatch compute.
 			Params:
 				id = View id.
@@ -2502,6 +2514,31 @@ mixin(joinFnBinds((){
 			layoutHandle = Vertex layout handle.
 		*/
 		{q{void}, q{destroy}, q{VertexLayoutHandle layoutHandle}, ext: `C++, "bgfx"`},
+		
+		/**
+		* Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+		* Attention: Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+		Params:
+			vertexBuffer = Vertex buffer with the geometry positions.
+			indexBuffer = Index buffer describing the triangles.
+		*/
+		{q{AccelerationStructureHandle}, q{createBlas}, q{VertexBufferHandle vertexBuffer, IndexBufferHandle indexBuffer}, ext: `C++, "bgfx"`},
+		
+		/**
+		* Create a top-level acceleration structure (TLAS) with a single BLAS instance
+		* (identity transform).
+		* Attention: Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+		Params:
+			blas = Bottom-level acceleration structure to instance.
+		*/
+		{q{AccelerationStructureHandle}, q{createTlas}, q{AccelerationStructureHandle blas}, ext: `C++, "bgfx"`},
+		
+		/**
+		* Destroy acceleration structure.
+		Params:
+			handle = Acceleration structure handle.
+		*/
+		{q{void}, q{destroy}, q{AccelerationStructureHandle handle}, ext: `C++, "bgfx"`},
 		
 		/**
 		* Create static vertex buffer.
@@ -4128,6 +4165,14 @@ mixin(joinFnBinds((){
 			format = Texture format. See: `TextureFormat::Enum`.
 		*/
 		{q{void}, q{setImage}, q{ubyte stage, TextureHandle handle, ushort firstLayer, ushort numLayers, ubyte mip, bgfx.impl.Access.Enum access, bgfx.impl.TextureFormat.Enum format=TextureFormat.count}, ext: `C++, "bgfx"`},
+		
+		/**
+		* Set acceleration structure for compute (ray query).
+		Params:
+			stage = Compute stage.
+			handle = Acceleration structure handle.
+		*/
+		{q{void}, q{setAccelerationStructure}, q{ubyte stage, AccelerationStructureHandle handle}, ext: `C++, "bgfx"`},
 		
 		/**
 		* Dispatch compute.

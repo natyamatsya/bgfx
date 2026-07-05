@@ -1176,6 +1176,7 @@ struct.VertexLayout { ctor, section = "Vertex Buffers" }
 --- per thread should be used. Use `bgfx::begin()` to obtain an encoder for a thread.
 struct.Encoder { section = "Encoder" }
 
+handle "AccelerationStructureHandle"
 handle "DynamicIndexBufferHandle"
 handle "DynamicVertexBufferHandle"
 handle "FrameBufferHandle"
@@ -1553,6 +1554,25 @@ func.createVertexLayout { section = "Vertex Buffers" }
 func.destroy { cname = "destroy_vertex_layout", section = "Vertex Buffers" }
 	"void"
 	.layoutHandle "VertexLayoutHandle" --- Vertex layout handle.
+
+--- Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+--- @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+func.createBlas { section = "Acceleration Structures" }
+	"AccelerationStructureHandle"       --- Acceleration structure handle.
+	.vertexBuffer "VertexBufferHandle"  --- Vertex buffer with the geometry positions.
+	.indexBuffer  "IndexBufferHandle"   --- Index buffer describing the triangles.
+
+--- Create a top-level acceleration structure (TLAS) with a single BLAS instance
+--- (identity transform).
+--- @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+func.createTlas { section = "Acceleration Structures" }
+	"AccelerationStructureHandle"       --- Acceleration structure handle.
+	.blas "AccelerationStructureHandle" --- Bottom-level acceleration structure to instance.
+
+--- Destroy acceleration structure.
+func.destroy { cname = "destroy_acceleration_structure", section = "Acceleration Structures" }
+	"void"
+	.handle "AccelerationStructureHandle" --- Acceleration structure handle.
 
 --- Create static vertex buffer.
 func.createVertexBuffer { section = "Vertex Buffers" }
@@ -2929,6 +2949,12 @@ func.Encoder.setImage { cname = "set_image_view", section = "Images" }
 	.format     "TextureFormat::Enum"  --- Texture format. See: `TextureFormat::Enum`.
 	 { default = "TextureFormat::Count" }
 
+--- Set acceleration structure for compute (ray query).
+func.Encoder.setAccelerationStructure { section = "Acceleration Structures" }
+	"void"
+	.stage  "uint8_t"                     --- Compute stage.
+	.handle "AccelerationStructureHandle" --- Acceleration structure handle.
+
 --- Dispatch compute.
 func.Encoder.dispatch { section = "Dispatch" }
 	"void"
@@ -3560,6 +3586,12 @@ func.setImage { cname = "set_image_view", section = "Images" }
 	.access     "Access::Enum"         --- Image access. See `Access::Enum`.
 	.format     "TextureFormat::Enum"  --- Texture format. See: `TextureFormat::Enum`.
 	 { default = "TextureFormat::Count" }
+
+--- Set acceleration structure for compute (ray query).
+func.setAccelerationStructure { section = "Acceleration Structures" }
+	"void"
+	.stage  "uint8_t"                     --- Compute stage.
+	.handle "AccelerationStructureHandle" --- Acceleration structure handle.
 
 --- Dispatch compute.
 func.dispatch { section = "Dispatch" }
