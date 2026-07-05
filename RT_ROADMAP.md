@@ -1,9 +1,12 @@
 # bgfx × Ray Tracing — Runtime Roadmap
 
-> Status: **Foundation integrated.** This branch merges the three prerequisite patch sets
-> (RT capability detection, Slang RT shader stages, Slang→Metal codegen) onto one tree so
-> the acceleration-structure runtime can be built. It is written to be idiomatic to bgfx so
-> the work has a realistic chance of being **upstreamed** (companion to `SLANG_ROADMAP.md`).
+> Status: **Complete through phase 6 (Metal verified on-device).** The acceleration-structure
+> runtime exists end-to-end: public API (`createBlas`/`createTlas`/`setAccelerationStructure`),
+> Vulkan + Metal backends, and the Cornell Box example rendering via hardware ray query with
+> the analytic compute fallback kept for hardware without `BGFX_CAPS_RAY_TRACING`. The Metal
+> path is verified on-device; the Vulkan path compiles end-to-end and awaits validation on a
+> host with `VK_KHR_ray_query` hardware. Written to be idiomatic to bgfx so the work has a
+> realistic chance of being **upstreamed** (companion to `SLANG_ROADMAP.md`).
 
 ## 1. Goal
 
@@ -127,12 +130,25 @@ back to the analytic compute shader otherwise.
 
 ## 9. Phasing
 
-1. **(this branch)** integrate the three prerequisites — done, green.
-2. shaderc MSL-version fix; verify a ray-query shader builds under the example pipeline.
-3. Public API + `noop`/other-backend stubs (compiles everywhere).
-4. **Vulkan** BLAS/TLAS + descriptor bind + ray-query dispatch (primary).
-5. **Metal** AS + bind.
-6. Cornell Box ray-query variant + caps-gated selection; visual-verify both backends.
+1. ✅ integrate the three prerequisites (`experimental/research-rt-runtime`) — green.
+2. ✅ shaderc MSL-version fix (`experimental/rt-runtime-msl-fix`) — ray-query shaders
+   auto-bump to MSL 2.4 instead of aborting SPIRV-Cross.
+3. ✅ Public API + backend stubs (`experimental/rt-runtime-api`) — `AccelerationStructureHandle`
+   end-to-end through the IDL/codegen, all 8 backends stubbed.
+4. ✅ **Vulkan** BLAS/TLAS + descriptor bind (`experimental/rt-runtime-vk`) — compiles clean;
+   runtime validation awaits an RT-capable Vulkan host (see Risks).
+5. ✅ **Metal** AS + bind (`experimental/rt-runtime-mtl`) — **verified on-device**: triangle
+   BLAS/TLAS + ray-query dispatch reads back 4096/4096 hits.
+6. ✅ Cornell Box ray-query variant + caps-gated selection
+   (`experimental/rt-runtime-cornellbox`) — the RT path and the analytic compute fallback
+   (kept, selected when the cap is absent) render the same image, verified on Metal.
+
+### Follow-ups
+
+- Validate the Vulkan path on `VK_KHR_ray_query` hardware.
+- Path-traced global illumination in the example (colour bleeding).
+- Generalize `createBlas`/`createTlas` (multiple geometries, instance transforms, update/refit).
+- The RT *pipeline* stages (SBT, raygen/hit/miss dispatch) — the larger later workstream.
 
 ## 10. Risks
 
