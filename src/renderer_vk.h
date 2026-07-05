@@ -248,6 +248,13 @@
 			VK_IMPORT_DEVICE_FUNC(true, vkUpdateVideoSessionParametersKHR);           \
 			/* VK_KHR_video_decode_queue */                                           \
 			VK_IMPORT_DEVICE_FUNC(true, vkCmdDecodeVideoKHR);                         \
+			/* VK_KHR_acceleration_structure / ray_query / buffer_device_address */   \
+			VK_IMPORT_DEVICE_FUNC(true, vkGetBufferDeviceAddressKHR);                 \
+			VK_IMPORT_DEVICE_FUNC(true, vkCreateAccelerationStructureKHR);            \
+			VK_IMPORT_DEVICE_FUNC(true, vkDestroyAccelerationStructureKHR);           \
+			VK_IMPORT_DEVICE_FUNC(true, vkGetAccelerationStructureBuildSizesKHR);     \
+			VK_IMPORT_DEVICE_FUNC(true, vkCmdBuildAccelerationStructuresKHR);         \
+			VK_IMPORT_DEVICE_FUNC(true, vkGetAccelerationStructureDeviceAddressKHR);  \
 
 #define VK_DESTROY                                \
 			VK_DESTROY_FUNC(Buffer);              \
@@ -509,6 +516,37 @@ VK_DESTROY_FUNC(DescriptorSet);
 		VertexLayoutHandle m_layoutHandle;
 	};
 
+	// A ray-tracing acceleration structure (VK_KHR_acceleration_structure). Owns its
+	// storage buffer, plus the scratch and (for a TLAS) instance buffers that must outlive
+	// the asynchronous GPU build; all are released together in destroy().
+	struct AccelerationStructureVK
+	{
+		AccelerationStructureVK()
+			: m_buffer(VK_NULL_HANDLE)
+			, m_scratchBuffer(VK_NULL_HANDLE)
+			, m_instanceBuffer(VK_NULL_HANDLE)
+			, m_mem(VK_NULL_HANDLE)
+			, m_scratchMem(VK_NULL_HANDLE)
+			, m_instanceMem(VK_NULL_HANDLE)
+			, m_accelerationStructure(VK_NULL_HANDLE)
+			, m_deviceAddress(0)
+		{
+		}
+
+		void createBlas(VkCommandBuffer _commandBuffer, VkDeviceAddress _vertexAddress, uint32_t _vertexStride, uint32_t _numVertices, VkDeviceAddress _indexAddress, VkIndexType _indexType, uint32_t _numTriangles);
+		void createTlas(VkCommandBuffer _commandBuffer, VkDeviceAddress _blasAddress);
+		void destroy();
+
+		VkBuffer m_buffer;         // acceleration-structure storage
+		VkBuffer m_scratchBuffer;  // build scratch (kept until destroy)
+		VkBuffer m_instanceBuffer; // TLAS instance data (kept until destroy)
+		VkDeviceMemory m_mem;
+		VkDeviceMemory m_scratchMem;
+		VkDeviceMemory m_instanceMem;
+		VkAccelerationStructureKHR m_accelerationStructure;
+		VkDeviceAddress m_deviceAddress;
+	};
+
 	struct BindType
 	{
 		enum Enum
@@ -516,6 +554,7 @@ VK_DESTROY_FUNC(DescriptorSet);
 			Buffer,
 			Image,
 			Sampler,
+			AccelerationStructure,
 
 			Count
 		};

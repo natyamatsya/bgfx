@@ -1288,6 +1288,9 @@ VK_IMPORT_DEVICE
 
 	struct TextureVK;
 
+	// Defined below (after s_renderVK); used by the acceleration-structure create paths.
+	static VkDeviceAddress getBufferDeviceAddress(VkBuffer _buffer);
+
 	struct RendererContextVK : public RendererContextI
 	{
 		RendererContextVK()
@@ -2742,6 +2745,11 @@ VK_IMPORT_DEVICE
 				m_vertexBuffers[ii].destroy();
 			}
 
+			for (uint32_t ii = 0; ii < BX_COUNTOF(m_accelerationStructures); ++ii)
+			{
+				m_accelerationStructures[ii].destroy();
+			}
+
 			for (uint32_t ii = 0; ii < BX_COUNTOF(m_shaders); ++ii)
 			{
 				m_shaders[ii].destroy();
@@ -2854,17 +2862,38 @@ VK_IMPORT_DEVICE
 
 		void createBlas(AccelerationStructureHandle _handle, VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) override
 		{
-			BX_UNUSED(_handle, _vertexBuffer, _indexBuffer);
+			const VertexBufferVK& vb = m_vertexBuffers[_vertexBuffer.idx];
+			const IndexBufferVK&  ib = m_indexBuffers[_indexBuffer.idx];
+
+			const uint32_t stride = m_vertexLayouts[vb.m_layoutHandle.idx].m_stride;
+			const uint32_t numVertices = stride > 0 ? vb.m_size / stride : 0;
+
+			const bool index32 = 0 != (ib.m_flags & BGFX_BUFFER_INDEX32);
+			const uint32_t indexSize = index32 ? 4 : 2;
+			const uint32_t numTriangles = (ib.m_size / indexSize) / 3;
+
+			m_accelerationStructures[_handle.idx].createBlas(
+				  m_commandBuffer
+				, getBufferDeviceAddress(vb.m_buffer)
+				, stride
+				, numVertices
+				, getBufferDeviceAddress(ib.m_buffer)
+				, index32 ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16
+				, numTriangles
+				);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, AccelerationStructureHandle _blas) override
 		{
-			BX_UNUSED(_handle, _blas);
+			m_accelerationStructures[_handle.idx].createTlas(
+				  m_commandBuffer
+				, m_accelerationStructures[_blas.idx].m_deviceAddress
+				);
 		}
 
 		void destroyAccelerationStructure(AccelerationStructureHandle _handle) override
 		{
-			BX_UNUSED(_handle);
+			m_accelerationStructures[_handle.idx].destroy();
 		}
 
 		void destroyVertexBuffer(VertexBufferHandle _handle) override
@@ -4515,6 +4544,7 @@ VK_IMPORT_DEVICE
 				{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, kDescriptorPoolChunkSize * 2                                },
 				{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         kDescriptorPoolChunkSize * BGFX_CONFIG_MAX_TEXTURE_SAMPLERS },
 				{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          kDescriptorPoolChunkSize * BGFX_CONFIG_MAX_TEXTURE_SAMPLERS },
+				{ VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, kDescriptorPoolChunkSize * BGFX_CONFIG_MAX_TEXTURE_SAMPLERS },
 			};
 
 			VkDescriptorPoolCreateInfo dpci;
@@ -4574,6 +4604,9 @@ VK_IMPORT_DEVICE
 
 			VkDescriptorImageInfo  imageInfo[BGFX_CONFIG_MAX_TEXTURE_SAMPLERS];
 			VkDescriptorBufferInfo bufferInfo[BGFX_CONFIG_MAX_TEXTURE_SAMPLERS];
+			// pNext payloads for acceleration-structure writes; must outlive vkUpdateDescriptorSets.
+			VkWriteDescriptorSetAccelerationStructureKHR accelInfo[BGFX_CONFIG_MAX_TEXTURE_SAMPLERS];
+			VkAccelerationStructureKHR accelHandles[BGFX_CONFIG_MAX_TEXTURE_SAMPLERS];
 
 			constexpr uint32_t kMaxDescriptorSets = 2 * BGFX_CONFIG_MAX_TEXTURE_SAMPLERS + 2;
 			VkWriteDescriptorSet wds[kMaxDescriptorSets] = {};
@@ -4581,6 +4614,7 @@ VK_IMPORT_DEVICE
 			uint32_t wdsCount    = 0;
 			uint32_t bufferCount = 0;
 			uint32_t imageCount  = 0;
+			uint32_t accelCount  = 0;
 
 			for (uint32_t stage = 0; stage < BGFX_CONFIG_MAX_TEXTURE_SAMPLERS; ++stage)
 			{
@@ -4645,6 +4679,31 @@ VK_IMPORT_DEVICE
 							wds[wdsCount].pImageInfo = &imageInfo[imageCount];
 							++imageCount;
 
+							++wdsCount;
+						}
+						break;
+
+					case Binding::AccelerationStructure:
+						{
+							accelHandles[accelCount] = m_accelerationStructures[bind.m_idx].m_accelerationStructure;
+
+							accelInfo[accelCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+							accelInfo[accelCount].pNext = NULL;
+							accelInfo[accelCount].accelerationStructureCount = 1;
+							accelInfo[accelCount].pAccelerationStructures    = &accelHandles[accelCount];
+
+							wds[wdsCount].sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+							wds[wdsCount].pNext            = &accelInfo[accelCount];
+							wds[wdsCount].dstSet           = descriptorSet;
+							wds[wdsCount].dstBinding       = bindInfo.binding;
+							wds[wdsCount].dstArrayElement  = 0;
+							wds[wdsCount].descriptorCount  = 1;
+							wds[wdsCount].descriptorType   = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+							wds[wdsCount].pImageInfo       = NULL;
+							wds[wdsCount].pBufferInfo      = NULL;
+							wds[wdsCount].pTexelBufferView = NULL;
+
+							++accelCount;
 							++wdsCount;
 						}
 						break;
@@ -5100,9 +5159,19 @@ VK_IMPORT_DEVICE
 			}
 
 
+			// When ray tracing is available, every device allocation is made
+			// device-address-capable so buffers can be referenced by acceleration-structure
+			// builds (which need VkDeviceAddress). g_caps is fixed before any allocation, so
+			// the memory LRU stays consistent.
+			VkMemoryAllocateFlagsInfo mafi;
+			mafi.sType      = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+			mafi.pNext      = NULL;
+			mafi.flags      = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+			mafi.deviceMask = 0;
+
 			VkMemoryAllocateInfo ma;
 			ma.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-			ma.pNext = NULL;
+			ma.pNext = (0 != (g_caps.supported & BGFX_CAPS_RAY_TRACING) ) ? &mafi : NULL;
 			ma.allocationSize = requirements->size;
 
 			VkResult result = VK_ERROR_UNKNOWN;
@@ -5314,6 +5383,7 @@ VK_IMPORT_DEVICE
 
 		IndexBufferVK  m_indexBuffers[BGFX_CONFIG_MAX_INDEX_BUFFERS];
 		VertexBufferVK m_vertexBuffers[BGFX_CONFIG_MAX_VERTEX_BUFFERS];
+		AccelerationStructureVK m_accelerationStructures[BGFX_CONFIG_MAX_ACCELERATION_STRUCTURES];
 		ShaderVK       m_shaders[BGFX_CONFIG_MAX_SHADERS];
 		ProgramVK      m_program[BGFX_CONFIG_MAX_PROGRAMS];
 		TextureVK      m_textures[BGFX_CONFIG_MAX_TEXTURES];
@@ -5788,6 +5858,244 @@ VK_DESTROY
 		return s_renderVK->m_cmd.m_currentFrameInFlight;
 	}
 
+	// Creates a device-address-capable buffer (used for acceleration-structure storage,
+	// build scratch, and TLAS instance data). Instance data uses host-visible memory so it
+	// can be written directly; storage/scratch use device-local.
+	static void createRtBuffer(uint32_t _size, VkBufferUsageFlags _usage, VkMemoryPropertyFlags _memProps, VkBuffer& _buffer, VkDeviceMemory& _mem)
+	{
+		const VkDevice device = s_renderVK->m_device;
+		const VkAllocationCallbacks* allocatorCb = s_renderVK->m_allocatorCb;
+
+		VkBufferCreateInfo bci;
+		bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bci.pNext = NULL;
+		bci.flags = 0;
+		bci.size  = _size;
+		bci.usage = _usage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+		bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		bci.queueFamilyIndexCount = 0;
+		bci.pQueueFamilyIndices   = NULL;
+		VK_CHECK(vkCreateBuffer(device, &bci, allocatorCb, &_buffer) );
+
+		VkMemoryRequirements mr;
+		vkGetBufferMemoryRequirements(device, _buffer, &mr);
+
+		VkMemoryAllocateFlagsInfo mafi;
+		mafi.sType      = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+		mafi.pNext      = NULL;
+		mafi.flags      = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+		mafi.deviceMask = 0;
+
+		VkMemoryAllocateInfo mai;
+		mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		mai.pNext = &mafi;
+		mai.allocationSize  = mr.size;
+		mai.memoryTypeIndex = bx::narrowCast<uint32_t>(s_renderVK->selectMemoryType(mr.memoryTypeBits, _memProps, 0) );
+		VK_CHECK(vkAllocateMemory(device, &mai, allocatorCb, &_mem) );
+		VK_CHECK(vkBindBufferMemory(device, _buffer, _mem, 0) );
+	}
+
+	static VkDeviceAddress getBufferDeviceAddress(VkBuffer _buffer)
+	{
+		VkBufferDeviceAddressInfo bdai;
+		bdai.sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+		bdai.pNext  = NULL;
+		bdai.buffer = _buffer;
+		return vkGetBufferDeviceAddressKHR(s_renderVK->m_device, &bdai);
+	}
+
+	void AccelerationStructureVK::createBlas(VkCommandBuffer _commandBuffer, VkDeviceAddress _vertexAddress, uint32_t _vertexStride, uint32_t _numVertices, VkDeviceAddress _indexAddress, VkIndexType _indexType, uint32_t _numTriangles)
+	{
+		const VkDevice device = s_renderVK->m_device;
+
+		// A single opaque triangle geometry. Position is assumed to be at vertex offset 0 in
+		// R32G32B32_SFLOAT form (the common bgfx layout / what the Cornell Box uses).
+		VkAccelerationStructureGeometryKHR geometry;
+		geometry.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+		geometry.pNext        = NULL;
+		geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+		geometry.flags        = VK_GEOMETRY_OPAQUE_BIT_KHR;
+		geometry.geometry.triangles.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+		geometry.geometry.triangles.pNext         = NULL;
+		geometry.geometry.triangles.vertexFormat  = VK_FORMAT_R32G32B32_SFLOAT;
+		geometry.geometry.triangles.vertexData.deviceAddress = _vertexAddress;
+		geometry.geometry.triangles.vertexStride  = _vertexStride;
+		geometry.geometry.triangles.maxVertex     = _numVertices > 0 ? _numVertices - 1 : 0;
+		geometry.geometry.triangles.indexType     = _indexType;
+		geometry.geometry.triangles.indexData.deviceAddress      = _indexAddress;
+		geometry.geometry.triangles.transformData.deviceAddress  = 0;
+
+		VkAccelerationStructureBuildGeometryInfoKHR buildInfo;
+		buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+		buildInfo.pNext = NULL;
+		buildInfo.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+		buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+		buildInfo.mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+		buildInfo.srcAccelerationStructure = VK_NULL_HANDLE;
+		buildInfo.dstAccelerationStructure = VK_NULL_HANDLE;
+		buildInfo.geometryCount = 1;
+		buildInfo.pGeometries   = &geometry;
+		buildInfo.ppGeometries  = NULL;
+		buildInfo.scratchData.deviceAddress = 0;
+
+		VkAccelerationStructureBuildSizesInfoKHR sizeInfo;
+		sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+		sizeInfo.pNext = NULL;
+		vkGetAccelerationStructureBuildSizesKHR(device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &_numTriangles, &sizeInfo);
+
+		createRtBuffer(bx::narrowCast<uint32_t>(sizeInfo.accelerationStructureSize), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_buffer, m_mem);
+		createRtBuffer(bx::narrowCast<uint32_t>(sizeInfo.buildScratchSize),          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_scratchBuffer, m_scratchMem);
+
+		VkAccelerationStructureCreateInfoKHR asci;
+		asci.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+		asci.pNext         = NULL;
+		asci.createFlags   = 0;
+		asci.buffer        = m_buffer;
+		asci.offset        = 0;
+		asci.size          = sizeInfo.accelerationStructureSize;
+		asci.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+		asci.deviceAddress = 0;
+		VK_CHECK(vkCreateAccelerationStructureKHR(device, &asci, s_renderVK->m_allocatorCb, &m_accelerationStructure) );
+
+		buildInfo.dstAccelerationStructure  = m_accelerationStructure;
+		buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_scratchBuffer);
+
+		VkAccelerationStructureBuildRangeInfoKHR range;
+		range.primitiveCount  = _numTriangles;
+		range.primitiveOffset = 0;
+		range.firstVertex     = 0;
+		range.transformOffset = 0;
+		const VkAccelerationStructureBuildRangeInfoKHR* ranges[] = { &range };
+
+		vkCmdBuildAccelerationStructuresKHR(_commandBuffer, 1, &buildInfo, ranges);
+		setMemoryBarrier(_commandBuffer, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+
+		VkAccelerationStructureDeviceAddressInfoKHR adai;
+		adai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+		adai.pNext = NULL;
+		adai.accelerationStructure = m_accelerationStructure;
+		m_deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(device, &adai);
+	}
+
+	void AccelerationStructureVK::createTlas(VkCommandBuffer _commandBuffer, VkDeviceAddress _blasAddress)
+	{
+		const VkDevice device = s_renderVK->m_device;
+
+		// One instance of the bottom-level AS at identity transform.
+		VkAccelerationStructureInstanceKHR instance;
+		bx::memSet(&instance, 0, sizeof(instance) );
+		instance.transform.matrix[0][0] = 1.0f;
+		instance.transform.matrix[1][1] = 1.0f;
+		instance.transform.matrix[2][2] = 1.0f;
+		instance.instanceCustomIndex                    = 0;
+		instance.mask                                   = 0xff;
+		instance.instanceShaderBindingTableRecordOffset = 0;
+		instance.flags                                  = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+		instance.accelerationStructureReference         = _blasAddress;
+
+		createRtBuffer(uint32_t(sizeof(instance) ), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, m_instanceBuffer, m_instanceMem);
+		void* mapped;
+		VK_CHECK(vkMapMemory(device, m_instanceMem, 0, sizeof(instance), 0, &mapped) );
+		bx::memCopy(mapped, &instance, sizeof(instance) );
+		vkUnmapMemory(device, m_instanceMem);
+
+		VkAccelerationStructureGeometryKHR geometry;
+		geometry.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+		geometry.pNext        = NULL;
+		geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+		geometry.flags        = VK_GEOMETRY_OPAQUE_BIT_KHR;
+		geometry.geometry.instances.sType           = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+		geometry.geometry.instances.pNext           = NULL;
+		geometry.geometry.instances.arrayOfPointers = VK_FALSE;
+		geometry.geometry.instances.data.deviceAddress = getBufferDeviceAddress(m_instanceBuffer);
+
+		VkAccelerationStructureBuildGeometryInfoKHR buildInfo;
+		buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+		buildInfo.pNext = NULL;
+		buildInfo.type  = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+		buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+		buildInfo.mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+		buildInfo.srcAccelerationStructure = VK_NULL_HANDLE;
+		buildInfo.dstAccelerationStructure = VK_NULL_HANDLE;
+		buildInfo.geometryCount = 1;
+		buildInfo.pGeometries   = &geometry;
+		buildInfo.ppGeometries  = NULL;
+		buildInfo.scratchData.deviceAddress = 0;
+
+		const uint32_t numInstances = 1;
+		VkAccelerationStructureBuildSizesInfoKHR sizeInfo;
+		sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+		sizeInfo.pNext = NULL;
+		vkGetAccelerationStructureBuildSizesKHR(device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &numInstances, &sizeInfo);
+
+		createRtBuffer(bx::narrowCast<uint32_t>(sizeInfo.accelerationStructureSize), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_buffer, m_mem);
+		createRtBuffer(bx::narrowCast<uint32_t>(sizeInfo.buildScratchSize),          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_scratchBuffer, m_scratchMem);
+
+		VkAccelerationStructureCreateInfoKHR asci;
+		asci.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+		asci.pNext         = NULL;
+		asci.createFlags   = 0;
+		asci.buffer        = m_buffer;
+		asci.offset        = 0;
+		asci.size          = sizeInfo.accelerationStructureSize;
+		asci.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+		asci.deviceAddress = 0;
+		VK_CHECK(vkCreateAccelerationStructureKHR(device, &asci, s_renderVK->m_allocatorCb, &m_accelerationStructure) );
+
+		buildInfo.dstAccelerationStructure  = m_accelerationStructure;
+		buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_scratchBuffer);
+
+		VkAccelerationStructureBuildRangeInfoKHR range;
+		range.primitiveCount  = numInstances;
+		range.primitiveOffset = 0;
+		range.firstVertex     = 0;
+		range.transformOffset = 0;
+		const VkAccelerationStructureBuildRangeInfoKHR* ranges[] = { &range };
+
+		vkCmdBuildAccelerationStructuresKHR(_commandBuffer, 1, &buildInfo, ranges);
+		setMemoryBarrier(_commandBuffer, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+		VkAccelerationStructureDeviceAddressInfoKHR adai;
+		adai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+		adai.pNext = NULL;
+		adai.accelerationStructure = m_accelerationStructure;
+		m_deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(device, &adai);
+	}
+
+	void AccelerationStructureVK::destroy()
+	{
+		const VkDevice device = s_renderVK->m_device;
+		const VkAllocationCallbacks* allocatorCb = s_renderVK->m_allocatorCb;
+
+		if (VK_NULL_HANDLE != m_accelerationStructure)
+		{
+			vkDestroyAccelerationStructureKHR(device, m_accelerationStructure, allocatorCb);
+			m_accelerationStructure = VK_NULL_HANDLE;
+		}
+
+		const VkBuffer buffers[] = { m_buffer, m_scratchBuffer, m_instanceBuffer };
+		const VkDeviceMemory mems[] = { m_mem, m_scratchMem, m_instanceMem };
+		for (uint32_t ii = 0; ii < BX_COUNTOF(buffers); ++ii)
+		{
+			if (VK_NULL_HANDLE != buffers[ii])
+			{
+				vkDestroyBuffer(device, buffers[ii], allocatorCb);
+			}
+			if (VK_NULL_HANDLE != mems[ii])
+			{
+				vkFreeMemory(device, mems[ii], allocatorCb);
+			}
+		}
+
+		m_buffer         = VK_NULL_HANDLE;
+		m_scratchBuffer  = VK_NULL_HANDLE;
+		m_instanceBuffer = VK_NULL_HANDLE;
+		m_mem            = VK_NULL_HANDLE;
+		m_scratchMem     = VK_NULL_HANDLE;
+		m_instanceMem    = VK_NULL_HANDLE;
+		m_deviceAddress  = 0;
+	}
+
 	void BufferVK::create(VkCommandBuffer _commandBuffer, uint32_t _size, void* _data, uint16_t _flags, bool _vertex, uint32_t _stride)
 	{
 		BX_UNUSED(_stride);
@@ -5804,10 +6112,14 @@ VK_DESTROY
 		bci.pNext = NULL;
 		bci.flags = 0;
 		bci.size  = _size;
+		// When ray tracing is available, allow any vertex/index buffer to be used as
+		// acceleration-structure build input (needs the device-address + build-input usage).
+		const bool rayTracing = 0 != (g_caps.supported & BGFX_CAPS_RAY_TRACING);
 		bci.usage = 0
 			| (_vertex              ? VK_BUFFER_USAGE_VERTEX_BUFFER_BIT   : VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
 			| (storage || indirect  ? VK_BUFFER_USAGE_STORAGE_BUFFER_BIT  : 0)
 			| (indirect             ? VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT : 0)
+			| (rayTracing           ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0)
 			| VK_BUFFER_USAGE_TRANSFER_DST_BIT
 			;
 		bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -6017,23 +6329,28 @@ VK_DESTROY
 					else if (UniformType::End == (~kUniformMask & type) )
 					{
 						// regCount is used for descriptor type
-						const bool isBuffer = idToDescriptorType(regCount) == DescriptorType::StorageBuffer;
+						const DescriptorType::Enum descriptorType = idToDescriptorType(regCount);
+						const bool isBuffer = descriptorType == DescriptorType::StorageBuffer;
+						const bool isAccel  = descriptorType == DescriptorType::AccelerationStructure;
 						if (0 == regIndex)
 						{
 							continue;
 						}
 
 						const uint8_t reverseShift = m_oldBindingModel
-							? (fragment ? kSpirvOldFragmentShift : 0) + (isBuffer ? kSpirvOldBufferShift : kSpirvOldImageShift)
+							? (fragment ? kSpirvOldFragmentShift : 0) + (isBuffer || isAccel ? kSpirvOldBufferShift : kSpirvOldImageShift)
 							: kSpirvBindShift;
 
 						const uint16_t stage = regIndex - reverseShift; // regIndex is used for buffer binding index
 
-						m_bindInfo[stage].type = isBuffer ? BindType::Buffer : BindType::Image;
+						m_bindInfo[stage].type = isAccel
+							? BindType::AccelerationStructure
+							: (isBuffer ? BindType::Buffer : BindType::Image)
+							;
 						m_bindInfo[stage].uniformHandle  = { 0 };
 						m_bindInfo[stage].binding        = regIndex;
 
-						if (!isBuffer)
+						if (!isBuffer && !isAccel)
 						{
 							const VkImageViewType viewType = hasTexData
 								? textureDimensionToViewType(idToTextureDimension(texDimension) )
@@ -6199,6 +6516,18 @@ VK_DESTROY
 						? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
 						: VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
 						;
+					binding.binding = m_bindInfo[ii].binding;
+					binding.pImmutableSamplers = NULL;
+					binding.descriptorCount = 1;
+					bidx++;
+				}
+				break;
+
+				case BindType::AccelerationStructure:
+				{
+					VkDescriptorSetLayoutBinding& binding = m_bindings[bidx];
+					binding.stageFlags = shaderStage;
+					binding.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 					binding.binding = m_bindInfo[ii].binding;
 					binding.pImmutableSamplers = NULL;
 					binding.descriptorCount = 1;
