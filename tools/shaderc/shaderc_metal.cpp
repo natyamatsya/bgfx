@@ -763,6 +763,20 @@ namespace bgfx { namespace metal
 			msl.add_msl_resource_binding(b);
 		}
 
+		// Ray-query acceleration structures are bound in Metal's buffer namespace; map them
+		// the same way as storage buffers (binding N -> Metal buffer N+1) so they line up
+		// with the runtime's setAccelerationStructure(stage, ...) at buffer index stage+1.
+		for (auto& resource : resources.acceleration_structures)
+		{
+			const unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);
+			spirv_cross::MSLResourceBinding b = {};
+			b.stage      = executionModel;
+			b.desc_set   = msl.get_decoration(resource.id, spv::DecorationDescriptorSet);
+			b.binding    = binding;
+			b.msl_buffer = binding - kSpirvBindShift + 1;
+			msl.add_msl_resource_binding(b);
+		}
+
 		for (auto& resource : resources.separate_samplers)
 		{
 			const unsigned binding = msl.get_decoration(resource.id, spv::DecorationBinding);

@@ -864,6 +864,7 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			, m_blitCommandEncoder(NULL)
 			, m_renderCommandEncoder(NULL)
 			, m_computeCommandEncoder(NULL)
+			, m_accelerationStructureCommandEncoder(NULL)
 			, m_renderCommandEncoderFbh(BGFX_INVALID_HANDLE)
 		{
 			bx::memSet(&m_windows, 0xff, sizeof(m_windows) );
@@ -1333,17 +1334,46 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 
 		void createBlas(AccelerationStructureHandle _handle, VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) override
 		{
-			BX_UNUSED(_handle, _vertexBuffer, _indexBuffer);
+			const VertexBufferMtl& vb = m_vertexBuffers[_vertexBuffer.idx];
+			const BufferMtl&       ib = m_indexBuffers[_indexBuffer.idx];
+
+			const uint32_t stride = m_vertexLayouts[vb.m_layoutHandle.idx].m_stride;
+			const uint32_t numVertices = stride > 0 ? vb.m_size / stride : 0;
+
+			const bool index32 = 0 != (ib.m_flags & BGFX_BUFFER_INDEX32);
+			const uint32_t numTriangles = (ib.m_size / (index32 ? 4 : 2) ) / 3;
+
+			m_accelerationStructures[_handle.idx].createBlas(
+				  m_device
+				, getAccelerationStructureCommandEncoder()
+				, vb
+				, stride
+				, numVertices
+				, ib
+				, index32
+				, numTriangles
+				);
+
+			// End the encoder so the build completes before anything (e.g. a TLAS that
+			// instances this BLAS) depends on it -- acceleration-structure builds are not
+			// ordered within a single encoder.
+			endEncoding();
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, AccelerationStructureHandle _blas) override
 		{
-			BX_UNUSED(_handle, _blas);
+			m_accelerationStructures[_handle.idx].createTlas(
+				  m_device
+				, getAccelerationStructureCommandEncoder()
+				, m_accelerationStructures[_blas.idx]
+				);
+
+			endEncoding();
 		}
 
 		void destroyAccelerationStructure(AccelerationStructureHandle _handle) override
 		{
-			BX_UNUSED(_handle);
+			m_accelerationStructures[_handle.idx].destroy();
 		}
 
 		void destroyVertexBuffer(VertexBufferHandle _handle) override
@@ -3238,6 +3268,23 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			return m_blitCommandEncoder;
 		}
 
+		MTL::AccelerationStructureCommandEncoder* getAccelerationStructureCommandEncoder()
+		{
+			if (NULL == m_accelerationStructureCommandEncoder)
+			{
+				endEncoding();
+
+				if (NULL == m_commandBuffer)
+				{
+					m_commandBuffer = m_cmd.alloc();
+				}
+
+				m_accelerationStructureCommandEncoder = m_commandBuffer->accelerationStructureCommandEncoder();
+			}
+
+			return m_accelerationStructureCommandEncoder;
+		}
+
 		void setRenderCommandEncoder(MTL::RenderCommandEncoder* _rce)
 		{
 			m_renderCommandEncoder = _rce;
@@ -3327,6 +3374,12 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				m_blitCommandEncoder->endEncoding();
 				m_blitCommandEncoder = NULL;
 			}
+
+			if (NULL != m_accelerationStructureCommandEncoder)
+			{
+				m_accelerationStructureCommandEncoder->endEncoding();
+				m_accelerationStructureCommandEncoder = NULL;
+			}
 		}
 
 		MTL::Device*      m_device;
@@ -3353,6 +3406,7 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 
 		IndexBufferMtl  m_indexBuffers[BGFX_CONFIG_MAX_INDEX_BUFFERS];
 		VertexBufferMtl m_vertexBuffers[BGFX_CONFIG_MAX_VERTEX_BUFFERS];
+		AccelerationStructureMtl m_accelerationStructures[BGFX_CONFIG_MAX_ACCELERATION_STRUCTURES];
 		ShaderMtl       m_shaders[BGFX_CONFIG_MAX_SHADERS];
 		ProgramMtl      m_program[BGFX_CONFIG_MAX_PROGRAMS];
 		TextureMtl      m_textures[BGFX_CONFIG_MAX_TEXTURES];
@@ -3423,6 +3477,7 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		MTL::BlitCommandEncoder*    m_blitCommandEncoder;
 		MTL::RenderCommandEncoder*  m_renderCommandEncoder;
 		MTL::ComputeCommandEncoder* m_computeCommandEncoder;
+		MTL::AccelerationStructureCommandEncoder* m_accelerationStructureCommandEncoder;
 		FrameBufferHandle           m_renderCommandEncoderFbh;
 	};
 
@@ -3667,6 +3722,78 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			bx::deleteObject(g_allocator, m_computePS);
 			m_computePS = NULL;
 		}
+	}
+
+	void AccelerationStructureMtl::createBlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const BufferMtl& _vertexBuffer, uint32_t _vertexStride, uint32_t _numVertices, const BufferMtl& _indexBuffer, bool _index32, uint32_t _numTriangles)
+	{
+		BX_UNUSED(_numVertices);
+
+		// A single opaque triangle geometry. Position is assumed to be at vertex offset 0 in
+		// float3 form (the common bgfx layout / what the Cornell Box uses).
+		MTL::AccelerationStructureTriangleGeometryDescriptor* triGeo = MTL::AccelerationStructureTriangleGeometryDescriptor::alloc()->init();
+		triGeo->setOpaque(true); // inline ray query auto-commits only opaque geometry
+		triGeo->setVertexBuffer(_vertexBuffer.m_ptr);
+		triGeo->setVertexBufferOffset(0);
+		triGeo->setVertexStride(_vertexStride);
+		triGeo->setVertexFormat(MTL::AttributeFormatFloat3);
+		triGeo->setIndexBuffer(_indexBuffer.m_ptr);
+		triGeo->setIndexBufferOffset(0);
+		triGeo->setIndexType(_index32 ? MTL::IndexTypeUInt32 : MTL::IndexTypeUInt16);
+		triGeo->setTriangleCount(_numTriangles);
+
+		MTL::PrimitiveAccelerationStructureDescriptor* desc = MTL::PrimitiveAccelerationStructureDescriptor::alloc()->init();
+		desc->setGeometryDescriptors(NS::Array::array( (const NS::Object*)triGeo) );
+
+		const MTL::AccelerationStructureSizes sizes = _device->accelerationStructureSizes(desc);
+		m_accelerationStructure = _device->newAccelerationStructure(sizes.accelerationStructureSize);
+		m_scratchBuffer         = _device->newBuffer(sizes.buildScratchBufferSize, MTL::ResourceStorageModePrivate);
+
+		_encoder->buildAccelerationStructure(m_accelerationStructure, desc, m_scratchBuffer, 0);
+
+		triGeo->release();
+		desc->release();
+	}
+
+	void AccelerationStructureMtl::createTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const AccelerationStructureMtl& _blas)
+	{
+		m_blas = _blas.m_accelerationStructure;
+
+		// One instance of the bottom-level AS at identity transform.
+		MTL::AccelerationStructureInstanceDescriptor instance;
+		bx::memSet(&instance, 0, sizeof(instance) );
+		instance.transformationMatrix = MTL::PackedFloat4x3(
+			  MTL::PackedFloat3(1.0f, 0.0f, 0.0f)
+			, MTL::PackedFloat3(0.0f, 1.0f, 0.0f)
+			, MTL::PackedFloat3(0.0f, 0.0f, 1.0f)
+			, MTL::PackedFloat3(0.0f, 0.0f, 0.0f)
+			);
+		instance.options = MTL::AccelerationStructureInstanceOptionDisableTriangleCulling;
+		instance.mask    = 0xff;
+		instance.intersectionFunctionTableOffset = 0;
+		instance.accelerationStructureIndex      = 0;
+
+		m_instanceBuffer = _device->newBuffer(&instance, sizeof(instance), MTL::ResourceStorageModeShared);
+
+		MTL::InstanceAccelerationStructureDescriptor* desc = MTL::InstanceAccelerationStructureDescriptor::alloc()->init();
+		desc->setInstanceCount(1);
+		desc->setInstanceDescriptorBuffer(m_instanceBuffer);
+		desc->setInstancedAccelerationStructures(NS::Array::array( (const NS::Object*)_blas.m_accelerationStructure) );
+
+		const MTL::AccelerationStructureSizes sizes = _device->accelerationStructureSizes(desc);
+		m_accelerationStructure = _device->newAccelerationStructure(sizes.accelerationStructureSize);
+		m_scratchBuffer         = _device->newBuffer(sizes.buildScratchBufferSize, MTL::ResourceStorageModePrivate);
+
+		_encoder->buildAccelerationStructure(m_accelerationStructure, desc, m_scratchBuffer, 0);
+
+		desc->release();
+	}
+
+	void AccelerationStructureMtl::destroy()
+	{
+		MTL_RELEASE_W(m_accelerationStructure, 0);
+		MTL_RELEASE_W(m_scratchBuffer, 0);
+		MTL_RELEASE_W(m_instanceBuffer, 0);
+		m_blas = NULL; // not owned (owned by the BLAS object)
 	}
 
 	void BufferMtl::create(uint32_t _size, void* _data, uint16_t _flags, uint16_t _stride, bool _vertex)
@@ -5736,6 +5863,21 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 									: m_vertexBuffers[bind.m_idx]
 									;
 									m_computeCommandEncoder->setBuffer(buffer.m_ptr, 0, stage + 1);
+								}
+								break;
+
+								case Binding::AccelerationStructure:
+								{
+									const AccelerationStructureMtl& as = m_accelerationStructures[bind.m_idx];
+									m_computeCommandEncoder->setAccelerationStructure(as.m_accelerationStructure, stage + 1);
+
+									// Bound acceleration structures (and the BLAS a TLAS references)
+									// must be made resident explicitly, or the GPU faults.
+									m_computeCommandEncoder->useResource(as.m_accelerationStructure, MTL::ResourceUsageRead);
+									if (NULL != as.m_blas)
+									{
+										m_computeCommandEncoder->useResource(as.m_blas, MTL::ResourceUsageRead);
+									}
 								}
 								break;
 							}
