@@ -330,6 +330,52 @@ namespace bgfx { namespace metal
 		}
 	}
 
+	// True if the SPIR-V module declares the RayQueryKHR capability (inline ray tracing).
+	// Scans the OpCapability instructions, which are always at the top of the module.
+	static bool spirvUsesRayQuery(const std::vector<uint32_t>& _spirv)
+	{
+		if (_spirv.size() < 5
+		||  _spirv[0] != spv::MagicNumber)
+		{
+			return false;
+		}
+
+		for (size_t ii = 5, num = _spirv.size(); ii < num; )
+		{
+			const uint32_t word      = _spirv[ii];
+			const uint16_t wordCount = uint16_t(word >> 16);
+			const uint16_t opcode    = uint16_t(word & 0xffff);
+
+			if (0 == wordCount)
+			{
+				break;
+			}
+
+			if (spv::OpCapability == opcode)
+			{
+				if (ii + 1 < num
+				&&  spv::CapabilityRayQueryKHR == _spirv[ii + 1])
+				{
+					return true;
+				}
+			}
+			else if (spv::OpExtension        != opcode
+				 &&  spv::OpExtInstImport    != opcode
+				 &&  spv::OpMemoryModel       != opcode
+				 &&  spv::OpSource            != opcode
+				 &&  spv::OpSourceExtension   != opcode)
+			{
+				// Capabilities precede everything but the source/ext preamble; once past
+				// that, there are no more capabilities to find.
+				break;
+			}
+
+			ii += wordCount;
+		}
+
+		return false;
+	}
+
 	static bool compile(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _shaderWriter, bx::WriterI* _messageWriter, bool _firstPass)
 	{
 		BX_UNUSED(_version);
@@ -657,12 +703,27 @@ namespace bgfx { namespace metal
 		// Uniform table (Metal constant-buffer size convention).
 		const uint16_t size = writeUniformArrayMetal(_shaderWriter, _uniforms, 'f' == _options.shaderType);
 
+		// Inspect the module before it is moved into SPIRV-Cross.
+		const bool usesRayQuery = metal::spirvUsesRayQuery(_spirv);
+
 		spirv_cross::CompilerMSL msl(std::move(_spirv) );
 
 		spirv_cross::CompilerMSL::Options mslOptions = msl.get_msl_options();
 		mslOptions.platform = metal::getMslPlatform(_options.platform);
 		uint32_t major, minor;
 		metal::getMSLVersion(_version, major, minor, _messageWriter);
+
+		// Metal inline ray query (intersection_query) requires MSL >= 2.4, and SPIRV-Cross
+		// aborts if asked to emit it at a lower version. Bump the requested version when the
+		// shader uses ray query so a plain "--profile metal" still produces a valid shader.
+		if (usesRayQuery
+		&&  (major < 2 || (2 == major && minor < 4) ) )
+		{
+			bx::write(_messageWriter, &err, "Warning: ray query requires MSL 2.4; upgrading from MSL %u.%u.\n", major, minor);
+			major = 2;
+			minor = 4;
+		}
+
 		mslOptions.set_msl_version(major, minor);
 		msl.set_msl_options(mslOptions);
 
