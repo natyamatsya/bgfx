@@ -292,6 +292,30 @@ namespace bgfx { namespace mtl
 		VertexLayoutHandle m_layoutHandle;
 	};
 
+	// A ray-tracing acceleration structure (Metal). Built on a dedicated
+	// AccelerationStructureCommandEncoder; the scratch (and, for a TLAS, the instance)
+	// buffer plus the referenced BLAS are kept for the object's lifetime -- the BLAS also
+	// so it can be made resident (useResource) whenever the TLAS is bound.
+	struct AccelerationStructureMtl
+	{
+		AccelerationStructureMtl()
+			: m_accelerationStructure(NULL)
+			, m_scratchBuffer(NULL)
+			, m_instanceBuffer(NULL)
+			, m_blas(NULL)
+		{
+		}
+
+		void createBlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const BufferMtl& _vertexBuffer, uint32_t _vertexStride, uint32_t _numVertices, const BufferMtl& _indexBuffer, bool _index32, uint32_t _numTriangles);
+		void createTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const AccelerationStructureMtl& _blas);
+		void destroy();
+
+		MTL::AccelerationStructure* m_accelerationStructure;
+		MTL::Buffer*                m_scratchBuffer;
+		MTL::Buffer*                m_instanceBuffer;
+		MTL::AccelerationStructure* m_blas; // for a TLAS: the referenced BLAS (residency)
+	};
+
 	struct ShaderMtl
 	{
 		ShaderMtl()
