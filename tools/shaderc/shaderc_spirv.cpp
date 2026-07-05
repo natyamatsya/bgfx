@@ -679,105 +679,9 @@ namespace bgfx { namespace spirv
 						glslang::SpirvToolsDisassemble(std::cout, spirv, getSpirvTargetVersion(_version, _messageWriter));
 					}
 
-					spirv_cross::CompilerReflection refl(spirv);
-					spirv_cross::ShaderResources resourcesrefl = refl.get_shader_resources();
-
-					// Loop through the separate_images, and extract the uniform names:
-					for (auto &resource : resourcesrefl.separate_images)
-					{
-						std::string name = refl.get_name(resource.id);
-
-						if (name.size() > 7
-						&&  0 == bx::strCmp(name.c_str() + name.length() - 7, "Texture") )
-						{
-							name = name.substr(0, name.length() - 7);
-						}
-
-						uint32_t binding_index = refl.get_decoration(resource.id, spv::Decoration::DecorationBinding);
-
-						auto imageType = refl.get_type(resource.base_type_id).image;
-						auto componentType = refl.get_type(imageType.type).basetype;
-
-						bool isCompareSampler = false;
-						for (auto& sampler : resourcesrefl.separate_samplers)
-						{
-							if (binding_index + 16 == refl.get_decoration(sampler.id, spv::Decoration::DecorationBinding) )
-							{
-								std::string samplerName = refl.get_name(sampler.id);
-								isCompareSampler = refl.variable_is_depth_or_compare(sampler.id) || samplerName.find("Comparison") != std::string::npos;
-								break;
-							}
-						}
-
-						Uniform un;
-						un.name = name;
-						un.type = UniformType::Enum(UniformType::Sampler
-								| kUniformSamplerBit
-								| (isCompareSampler ? kUniformCompareBit : 0)
-								);
-
-						un.texComponent = textureComponentTypeToId(SpirvCrossBaseTypeToFormatType(componentType, imageType.depth) );
-						un.texDimension = textureDimensionToId(SpirvDimToTextureViewDimension(imageType.dim, imageType.arrayed) );
-						un.texFormat = uint16_t(imageFormatToTextureFormat(imageType.format) );
-
-						un.regIndex = uint16_t(binding_index);
-						un.regCount = 0; // unused
-
-						uniforms.push_back(un);
-					}
-
-					// Loop through the storage_images, and extract the uniform names:
-					for (auto &resource : resourcesrefl.storage_images)
-					{
-						std::string name = refl.get_name(resource.id);
-
-						uint32_t binding_index = refl.get_decoration(resource.id, spv::Decoration::DecorationBinding);
-
-						auto imageType = refl.get_type(resource.base_type_id).image;
-						auto componentType = refl.get_type(imageType.type).basetype;
-
-						spirv_cross::Bitset flags = refl.get_decoration_bitset(resource.id);
-						UniformType::Enum type = flags.get(spv::DecorationNonWritable)
-							? UniformType::Enum(kUniformReadOnlyBit | UniformType::End)
-							: UniformType::End;
-
-						Uniform un;
-						un.name = name;
-						un.type = type;
-
-						un.texComponent = textureComponentTypeToId(SpirvCrossBaseTypeToFormatType(componentType, imageType.depth) );
-						un.texDimension = textureDimensionToId(SpirvDimToTextureViewDimension(imageType.dim, imageType.arrayed) );
-						un.texFormat = uint16_t(imageFormatToTextureFormat(imageType.format) );
-
-						un.regIndex = uint16_t(binding_index);
-						un.regCount = descriptorTypeToId(DescriptorType::StorageImage);
-
-						uniforms.push_back(un);
-					}
+					reflectSpirvResourceUniforms(spirv, uniforms);
 
 					bx::Error err;
-
-					// Loop through the storage buffer, and extract the uniform names:
-					for (auto& resource : resourcesrefl.storage_buffers)
-					{
-						std::string name = refl.get_name(resource.id);
-
-						uint32_t binding_index = refl.get_decoration(resource.id, spv::Decoration::DecorationBinding);
-
-						spirv_cross::Bitset flags = refl.get_buffer_block_flags(resource.id);
-						UniformType::Enum type = flags.get(spv::DecorationNonWritable)
-							? UniformType::Enum(kUniformReadOnlyBit | UniformType::End)
-							: UniformType::End;
-
-						Uniform un;
-						un.name = name;
-						un.type = type;
-						un.num = 0;
-						un.regIndex = uint16_t(binding_index);
-						un.regCount = descriptorTypeToId(DescriptorType::StorageBuffer);
-
-						uniforms.push_back(un);
-					}
 
 					uint16_t size = writeUniformArray(_shaderWriter, uniforms, _options.shaderType == 'f');
 
@@ -817,6 +721,109 @@ namespace bgfx { namespace spirv
 	}
 
 } // namespace spirv
+
+	void reflectSpirvResourceUniforms(const std::vector<uint32_t>& _spirv, UniformArray& _uniforms)
+	{
+		spirv_cross::CompilerReflection refl(_spirv);
+		spirv_cross::ShaderResources resourcesrefl = refl.get_shader_resources();
+
+		// Separate images -> sampler uniforms. bgfx pairs texture N with its sampler at
+		// N+kSpirvSamplerShift; when that sampler is a depth/compare sampler the record
+		// carries the compare bit.
+		for (auto& resource : resourcesrefl.separate_images)
+		{
+			std::string name = refl.get_name(resource.id);
+
+			if (name.size() > 7
+			&&  0 == bx::strCmp(name.c_str() + name.length() - 7, "Texture") )
+			{
+				name = name.substr(0, name.length() - 7);
+			}
+
+			uint32_t binding_index = refl.get_decoration(resource.id, spv::Decoration::DecorationBinding);
+
+			auto imageType = refl.get_type(resource.base_type_id).image;
+			auto componentType = refl.get_type(imageType.type).basetype;
+
+			bool isCompareSampler = false;
+			for (auto& sampler : resourcesrefl.separate_samplers)
+			{
+				if (binding_index + kSpirvSamplerShift == refl.get_decoration(sampler.id, spv::Decoration::DecorationBinding) )
+				{
+					std::string samplerName = refl.get_name(sampler.id);
+					isCompareSampler = refl.variable_is_depth_or_compare(sampler.id) || samplerName.find("Comparison") != std::string::npos;
+					break;
+				}
+			}
+
+			Uniform un;
+			un.name = name;
+			un.type = UniformType::Enum(UniformType::Sampler
+					| kUniformSamplerBit
+					| (isCompareSampler ? kUniformCompareBit : 0)
+					);
+
+			un.texComponent = textureComponentTypeToId(spirv::SpirvCrossBaseTypeToFormatType(componentType, imageType.depth) );
+			un.texDimension = textureDimensionToId(spirv::SpirvDimToTextureViewDimension(imageType.dim, imageType.arrayed) );
+			un.texFormat = uint16_t(imageFormatToTextureFormat(imageType.format) );
+
+			un.regIndex = uint16_t(binding_index);
+			un.regCount = 0; // unused
+
+			_uniforms.push_back(un);
+		}
+
+		// Storage images.
+		for (auto& resource : resourcesrefl.storage_images)
+		{
+			std::string name = refl.get_name(resource.id);
+
+			uint32_t binding_index = refl.get_decoration(resource.id, spv::Decoration::DecorationBinding);
+
+			auto imageType = refl.get_type(resource.base_type_id).image;
+			auto componentType = refl.get_type(imageType.type).basetype;
+
+			spirv_cross::Bitset flags = refl.get_decoration_bitset(resource.id);
+			UniformType::Enum type = flags.get(spv::DecorationNonWritable)
+				? UniformType::Enum(kUniformReadOnlyBit | UniformType::End)
+				: UniformType::End;
+
+			Uniform un;
+			un.name = name;
+			un.type = type;
+
+			un.texComponent = textureComponentTypeToId(spirv::SpirvCrossBaseTypeToFormatType(componentType, imageType.depth) );
+			un.texDimension = textureDimensionToId(spirv::SpirvDimToTextureViewDimension(imageType.dim, imageType.arrayed) );
+			un.texFormat = uint16_t(imageFormatToTextureFormat(imageType.format) );
+
+			un.regIndex = uint16_t(binding_index);
+			un.regCount = descriptorTypeToId(DescriptorType::StorageImage);
+
+			_uniforms.push_back(un);
+		}
+
+		// Storage buffers.
+		for (auto& resource : resourcesrefl.storage_buffers)
+		{
+			std::string name = refl.get_name(resource.id);
+
+			uint32_t binding_index = refl.get_decoration(resource.id, spv::Decoration::DecorationBinding);
+
+			spirv_cross::Bitset flags = refl.get_buffer_block_flags(resource.id);
+			UniformType::Enum type = flags.get(spv::DecorationNonWritable)
+				? UniformType::Enum(kUniformReadOnlyBit | UniformType::End)
+				: UniformType::End;
+
+			Uniform un;
+			un.name = name;
+			un.type = type;
+			un.num = 0;
+			un.regIndex = uint16_t(binding_index);
+			un.regCount = descriptorTypeToId(DescriptorType::StorageBuffer);
+
+			_uniforms.push_back(un);
+		}
+	}
 
 	bool compileSPIRVShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _shaderWriter, bx::WriterI* _messageWriter)
 	{

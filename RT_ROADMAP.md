@@ -1,0 +1,144 @@
+# bgfx × Ray Tracing — Runtime Roadmap
+
+> Status: **Foundation integrated.** This branch merges the three prerequisite patch sets
+> (RT capability detection, Slang RT shader stages, Slang→Metal codegen) onto one tree so
+> the acceleration-structure runtime can be built. It is written to be idiomatic to bgfx so
+> the work has a realistic chance of being **upstreamed** (companion to `SLANG_ROADMAP.md`).
+
+## 1. Goal
+
+Let bgfx users ray trace on the GPU. The first target is **inline ray query** (`RayQuery` /
+`OpRayQueryProceedKHR` / Metal `intersection_query`) issued from a **compute shader** —
+deliberately *not* the ray-tracing pipeline (raygen/hit/miss + shader binding table).
+
+Why ray-query-first:
+- It runs on the **ordinary compute pipeline** — no SBT, no new pipeline object, no new
+  shader stages at the runtime. The only genuinely new runtime object is the
+  **acceleration structure**.
+- It reuses the frozen shader envelope (a ray-query shader is a `CSH`).
+- It is the shorter road to a rendered image on **both** Vulkan and Metal, and it is the
+  path the [52-cornellbox](examples/52-cornellbox) example's accelerated mode will take,
+  with the analytic compute shader as the fallback when `BGFX_CAPS_RAY_TRACING` is absent.
+
+The RT *pipeline* stages already compile in shaderc (see `SLANG_ROADMAP` / the RT-stages
+work) but are a later, larger runtime workstream (SBT, pipeline, per-stage dispatch).
+
+## 2. Feasibility — confirmed
+
+- **VK shader:** Slang → SPIR-V emits `OpTypeAccelerationStructureKHR`,
+  `OpRayQueryInitializeKHR/ProceedKHR/GetIntersectionTypeKHR` + `SPV_KHR_ray_query`
+  (Slang auto-adds the `spvRayQueryKHR` capability).
+- **Metal shader:** SPIR-V → SPIRV-Cross emits `#include <metal_raytracing>`,
+  `raytracing::acceleration_structure<...>`, `raytracing::intersection_query<...>` —
+  **at MSL ≥ 2.4**. The default `-p metal` (low MSL) *silently truncates* the shader; a
+  shaderc fix is required (bump the default MSL for ray-query shaders, and error rather than
+  emit a truncated envelope).
+- **metal-cpp** already exposes the entire AS API (`3rdparty/metal-cpp/metal.hpp`) — no
+  header extension needed: `MTL::AccelerationStructure` (`:10503`),
+  `PrimitiveAccelerationStructureDescriptor` (`:10066`),
+  `Device::accelerationStructureSizes` (`:15472`) / `newAccelerationStructure` (`:15547`),
+  `AccelerationStructureCommandEncoder::buildAccelerationStructure` (`:11844`),
+  `ComputeCommandEncoder::setAccelerationStructure` (`:13966`) / `useResource` (`:14007`).
+- **SPIRV-Cross** already has the ray-query→MSL path (`3rdparty/spirv-cross/spirv_msl.cpp`
+  `is_intersection_query`, the `MSL_RAY_QUERY_*` emission).
+
+Net: this is "add a new resource type + build/bind an acceleration structure", **not**
+"invent a shader path".
+
+## 3. What this (foundation) branch already provides
+
+Merged from the three prerequisite branches, all verified green together on this tree:
+- `BGFX_CAPS_RAY_TRACING` + VK RT extensions/features + Metal `supportsRaytracing` detection
+  (`research-rt-feature-config`).
+- `DescriptorType::AccelerationStructure` (`src/shader.h`) + the Slang front-end reflecting
+  `RaytracingAccelerationStructure` as a bound uniform instead of dropping it, plus the RT
+  shader-stage magics (`shaderc-slang-rt-stages`).
+- Slang → Metal (MSL) codegen + the std140 uniform-array reflection fix
+  (`slang-spirv-x-metal`, `slang-metal-uniform-arrays`).
+
+## 4. Public API (idiomatic bgfx)
+
+A new resource type `AccelerationStructureHandle`, mirroring the `VertexBuffer` end-to-end
+pattern. Sketch:
+```cpp
+AccelerationStructureHandle createBlas(VertexBufferHandle, IndexBufferHandle, /* geometry */ ...);
+AccelerationStructureHandle createTlas(const AsInstance* instances, uint32_t num);
+void destroy(AccelerationStructureHandle);
+// bind to a (compute) shader, like setBuffer:
+void setAccelerationStructure(uint8_t stage, AccelerationStructureHandle);
+```
+
+### Resource-add touch points (worked from `VertexBuffer`)
+| File | Change |
+|------|--------|
+| `include/bgfx/bgfx.h` | `BGFX_HANDLE(AccelerationStructureHandle)` (~:517 block) |
+| `scripts/bgfx.idl` | handle decl (~:1173) + `func.createBlas/createTlas` + `func.destroy` overload; regen bindings |
+| `src/config.h` | `BGFX_CONFIG_MAX_ACCELERATION_STRUCTURES` (~:342 pattern) |
+| `src/bgfx_p.h` | `CommandBuffer::Enum` create/destroy; `RendererContextI` virtuals (~:4148); `Context` handle allocator + records + create/destroy/internal (~:4533); `Binding::Enum::AccelerationStructure` + setter (keep `sizeof(Binding)==16`, ~:1913) |
+| `src/bgfx.cpp` | public wrappers (~:4766); `rendererExecCommands` cases (~:3451, write/read order must match); deferred-free (~:2660); encoder `setAccelerationStructure` + free-fn forwarder (~:4483) |
+| all 8 `renderer_*.cpp` | implement the two new pure virtuals (noop stub minimum) |
+
+## 5. Vulkan backend (`src/renderer_vk.cpp`)
+
+- **Import PFNs** into `VK_IMPORT_DEVICE` (`renderer_vk.h:127`, optional): `vkCreate/Destroy/
+  CmdBuildAccelerationStructuresKHR`, `vkGetAccelerationStructureBuildSizesKHR`,
+  `vkGetAccelerationStructureDeviceAddressKHR`, `vkGetBufferDeviceAddressKHR` — auto-resolve
+  at `:2180`. (The feature-config work enabled the extensions/features but did **not** import
+  these entry points.)
+- **Device-address buffers:** add a `createDeviceLocalBuffer(size, usage, deviceAddress)`
+  helper beside `createHostBuffer` (`:4840`) — AS-storage / scratch / build-input usage bits
+  + `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT`, and chain
+  `VkMemoryAllocateFlagsInfo{DEVICE_ADDRESS}` into `allocateMemory`'s `ma.pNext` (`:4813`).
+  bgfx uses manual `VkDeviceMemory` (not VMA).
+- **`AccelerationStructureVK`** mirrors `BufferVK::create` (`:5498`): sizes from
+  `vkGetAccelerationStructureBuildSizesKHR`; `vkCmdBuildAccelerationStructuresKHR` on
+  `m_commandBuffer` + an AS-build→compute `setMemoryBarrier`. Scratch alignment from
+  `VkPhysicalDeviceAccelerationStructurePropertiesKHR.minAccelerationStructureScratchOffsetAlignment`.
+- **Descriptor:** `DescriptorType::AccelerationStructure` → `BindType::AccelerationStructure`
+  (`renderer_vk.h:514`); layout switch (`:5892`) emits
+  `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR`; write loop (`getDescriptorSet`, ~:4362)
+  chains `VkWriteDescriptorSetAccelerationStructureKHR` via `pNext`; add to the pool table
+  (`:4232`).
+
+## 6. Metal backend (`src/renderer_mtl.cpp` / `.h`)
+
+- **`AccelerationStructureMtl`** mirrors `BufferMtl` (`renderer_mtl.h:250`):
+  `Device::accelerationStructureSizes` + `newAccelerationStructure` + a scratch `MTL::Buffer`.
+- **Build encoder:** add `m_accelerationStructureCommandEncoder`, mirror the
+  `getBlitCommandEncoder`/`endEncoding` lifecycle (`:3047`/`:3134`); `buildAccelerationStructure`
+  at create/update time (only one encoder live per command buffer).
+- **Bind:** in the compute bind loop (`:5406`), a new `Binding::AccelerationStructure` case
+  calls `setAccelerationStructure(as, index)` **and** `useResource(as, Read)` (plus
+  `useResource` for each BLAS an instance-AS references) before the dispatch (`:5477`). The
+  residency call has no analog in the current bind path — easy to miss → GPU fault.
+
+## 7. shaderc
+
+- Land the accel-structure reflection (done on this tree).
+- **Bump the default Metal MSL version to ≥ 2.4 for ray-query shaders** (or globally for RT),
+  and make shaderc *error* on version-too-low rather than emit a truncated envelope.
+
+## 8. Cornell Box payoff
+
+Add a ray-query variant of `examples/52-cornellbox/cs_cornellbox.slang` (trace `scene` via
+`RayQuery` instead of the analytic intersector); the app builds a BLAS+TLAS for the box
+geometry and selects the path on `getCaps()->supported & BGFX_CAPS_RAY_TRACING`, falling
+back to the analytic compute shader otherwise.
+
+## 9. Phasing
+
+1. **(this branch)** integrate the three prerequisites — done, green.
+2. shaderc MSL-version fix; verify a ray-query shader builds under the example pipeline.
+3. Public API + `noop`/other-backend stubs (compiles everywhere).
+4. **Vulkan** BLAS/TLAS + descriptor bind + ray-query dispatch (primary).
+5. **Metal** AS + bind.
+6. Cornell Box ray-query variant + caps-gated selection; visual-verify both backends.
+
+## 10. Risks
+
+- **KosmicKrisp (macOS Vulkan) does not expose the RT extensions** (confirmed during the
+  caps work) → the Vulkan RT path cannot be validated on this Mac; needs a discrete-GPU
+  Vulkan host (NVIDIA/AMD) or an RT-capable MoltenVK. **Metal is the locally-verifiable path.**
+- TLAS instance/transform + geometry device-address plumbing is the fiddliest VK part.
+- `Binding` is a fixed 16-byte hashed struct — the new bind type must fit.
+- Metal AS residency (`useResource`) is mandatory and unlike anything in the current bind path.

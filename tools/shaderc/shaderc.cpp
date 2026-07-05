@@ -23,22 +23,7 @@ namespace bgfx
 {
 	bool g_verbose = false;
 
-	struct ShadingLang
-	{
-		enum Enum
-		{
-			ESSL,
-			GLSL,
-			HLSL,
-			Metal,
-			PSSL,
-			SpirV,
-			WGSL,
-			Dxil,
-
-			Count
-		};
-	};
+	// ShadingLang lives in shaderc.h (shared with the Slang front-end for target routing).
 
 	static const char* s_shadingLangName[] =
 	{
@@ -1192,7 +1177,9 @@ namespace bgfx
 		{ '\0', "keepcomments",            0, NULL,             "Do not discard comments."                                                        },
 		{ '\0', "define",                  1, "<defines>",      "Add defines to preprocessor. (Semicolon-separated)"                              },
 		{ '\0', "raw",                     0, NULL,             "Do not process shader. No preprocessor, and no glsl-optimizer. (GLSL only)"      },
-		{ '\0', "type",                    1, "<type>",         "Shader type. Can be 'vertex', 'fragment, or 'compute'."                          },
+		{ '\0', "type",                    1, "<type>",         "Shader type. Raster/compute: 'vertex', 'fragment', 'compute'.\n"
+		                                                        "Ray tracing (Slang only): 'raygeneration', 'intersection', 'anyhit',\n"
+		                                                        "'closesthit', 'miss', 'callable'."                                               },
 		{ '\0', "lang",                    1, "<lang>",         "Source language: 'bgfx' (default) or 'slang'. Inferred from a .slang extension." },
 		{ '\0', "slang-no-predefined",     0, NULL,             "Slang: do not auto-declare bgfx predefined uniforms (u_modelViewProj, etc.);\n"
 		                                                        "declare them in the shader."                                                     },
@@ -1311,7 +1298,7 @@ namespace bgfx
 		if (_options.slang)
 		{
 			BX_UNUSED(_varying, _comment);
-			return compileSlangShader(_options, profile->id, std::string(_shader, _shaderLen), _shaderWriter, _messageWriter);
+			return compileSlangShader(_options, profile->id, profile->lang, std::string(_shader, _shaderLen), _shaderWriter, _messageWriter);
 		}
 
 		Preprocessor preprocessor(_options.inputFilePath.c_str(), profile->lang == ShadingLang::ESSL, _messageWriter);
@@ -2889,6 +2876,43 @@ namespace bgfx
 		return compiled;
 	}
 
+	// Maps the --type string to the single-char shaderType code (which is also the
+	// leading char of the chunk magic). The classic raster/compute types keep their
+	// v/f/c first-letter abbreviations; the ray tracing stages need full-name matching
+	// because several share a first letter (closesthit/callable/compute all begin 'c').
+	// Returns '\0' for an unrecognized name.
+	static char shaderTypeFromString(const char* _type)
+	{
+		const bx::StringView sv(_type);
+
+		static const struct { const char* name; char code; } s_shaderTypes[] =
+		{
+			{ "vertex",        'v' },
+			{ "fragment",      'f' },
+			{ "compute",       'c' },
+			{ "raygeneration", 'r' },
+			{ "raygen",        'r' },
+			{ "intersection",  'i' },
+			{ "anyhit",        'a' },
+			{ "closesthit",    'h' },
+			{ "miss",          'm' },
+			{ "callable",      'l' },
+		};
+
+		for (const auto& st : s_shaderTypes)
+		{
+			if (0 == bx::strCmpI(sv, st.name) )
+			{
+				return st.code;
+			}
+		}
+
+		// Back-compat: a bare leading letter (e.g. "v", "frag") still resolves by first
+		// char. Only v/f/c are valid there; RT stages must be spelled out.
+		const char code = bx::toLower(_type[0]);
+		return ('v' == code || 'f' == code || 'c' == code) ? code : '\0';
+	}
+
 	int compileShader(int _argc, const char* _argv[])
 	{
 		bx::CommandLine cmdLine(_argc, _argv, s_options, BX_COUNTOF(s_options) );
@@ -2958,7 +2982,13 @@ namespace bgfx
 		Options options;
 		options.inputFilePath = filePath;
 		options.outputFilePath = consoleOut ? "" : outFilePath;
-		options.shaderType = bx::toLower(type[0]);
+		options.shaderType = shaderTypeFromString(type);
+		if ('\0' == options.shaderType)
+		{
+			help("Invalid shader type. Use vertex/fragment/compute or a ray tracing stage "
+				"(raygeneration/intersection/anyhit/closesthit/miss/callable).");
+			return bx::kExitFailure;
+		}
 
 		options.disasm = cmdLine.hasArg('\0', "disasm");
 
