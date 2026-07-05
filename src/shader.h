@@ -31,6 +31,7 @@ namespace bgfx
 		{
 			StorageBuffer,
 			StorageImage,
+			AccelerationStructure,
 
 			Count
 		};
