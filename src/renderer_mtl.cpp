@@ -1050,6 +1050,11 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				: 0
 				;
 
+			g_caps.supported |= m_device->supportsRaytracing()
+				? BGFX_CAPS_RAY_TRACING
+				: 0
+				;
+
 			bool hasPixelFormatDepth32Float_Stencil8;
 			CHECK_FEATURE_AVAILABLE(
 				  hasPixelFormatDepth32Float_Stencil8

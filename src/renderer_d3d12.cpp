@@ -831,6 +831,7 @@ namespace bgfx { namespace d3d12
 			, m_rtMsaa(false)
 			, m_directAccessSupport(false)
 			, m_variableRateShadingSupport(false)
+			, m_rayTracingSupport(false)
 			, m_mipGen(NULL)
 			, m_zeroInitBuffer(NULL)
 		{
@@ -1199,6 +1200,7 @@ namespace bgfx { namespace d3d12
 				BX_TRACE("\tSRVOnlyTiledResourceTier3 %d", options5.SRVOnlyTiledResourceTier3);
 				BX_TRACE("\tRenderPassesTier %d", options5.RenderPassesTier);
 				BX_TRACE("\tRaytracingTier %d", options5.RaytracingTier);
+				m_rayTracingSupport = options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0;
 				break;
 			}
 
@@ -1760,6 +1762,7 @@ namespace bgfx { namespace d3d12
  					| BGFX_CAPS_TEXTURE_EXTERNAL
 					| BGFX_CAPS_TEXTURE_READ_BACK
 					| (m_variableRateShadingSupport ? BGFX_CAPS_VARIABLE_RATE_SHADING : 0)
+					| (m_rayTracingSupport ? BGFX_CAPS_RAY_TRACING : 0)
 					| BGFX_CAPS_VERTEX_ATTRIB_HALF
 					| BGFX_CAPS_VERTEX_ATTRIB_UINT10
 					| BGFX_CAPS_VERTEX_ID
@@ -4380,6 +4383,7 @@ namespace bgfx { namespace d3d12
 		bool m_rtMsaa;
 		bool m_directAccessSupport;
 		bool m_variableRateShadingSupport;
+		bool m_rayTracingSupport;
 
 		const MipGen* m_mipGen;
 		ID3D12Resource* m_zeroInitBuffer;
