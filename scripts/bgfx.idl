@@ -415,6 +415,7 @@ flag.Caps { bits = 64, base = 1, name = "Caps", section = "Available Caps" }
 	.VertexAttribUint10     --- Vertex attribute 10_10_10_2 is supported.
 	.VideoDecode            --- Hardware video decode is supported.
 	.ViewportLayerArray     --- Viewport layer is available in vertex shader.
+	.RayTracing             --- Ray tracing is supported.
 	()
 
 flag.CapsFormat { bits = 32 }

@@ -742,6 +742,9 @@ constdef CapsFlags : inline ulong
 
 	// Viewport layer is available in vertex shader.
 	VIEWPORTLAYERARRAY     = 0x0000000000800000,
+
+	// Ray tracing is supported.
+	RAYTRACING             = 0x0000000001000000,
 }
 
 constdef CapsFormatFlags : inline uint
