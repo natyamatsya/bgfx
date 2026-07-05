@@ -102,6 +102,25 @@ namespace bgfx
 {
 	extern bool g_verbose;
 
+	// Target shading language a profile compiles to. Shared so front-ends (notably the
+	// Slang front-end) can route to the right backend emitter.
+	struct ShadingLang
+	{
+		enum Enum
+		{
+			ESSL,
+			GLSL,
+			HLSL,
+			Metal,
+			PSSL,
+			SpirV,
+			WGSL,
+			Dxil,
+
+			Count
+		};
+	};
+
 	bx::StringView nextWord(bx::StringView& _parse);
 
 	constexpr uint16_t kAccessRead  = 0x8000;
@@ -193,8 +212,9 @@ namespace bgfx
 	// record: nameSize:u8, name, type:u8(|fragmentBit), num:u8, regIndex:u16,
 	// regCount:u16, texComponent:u8, texDimension:u8, texFormat:u16). Returns the
 	// constant-buffer size. This is the single source of truth for that byte
-	// layout; the SPIR-V, WGSL and Slang backends all use it. (shaderc_metal.cpp
-	// keeps its own writeUniformArrayMetal, which computes the size differently.)
+	// layout; the SPIR-V, WGSL and Slang backends all use it. Metal shares the same
+	// record layout but a different constant-buffer size convention -- see
+	// writeUniformArrayMetal below.
 	inline uint16_t writeUniformArray(bx::WriterI* _shaderWriter, const UniformArray& uniforms, bool isFragmentShader)
 	{
 		uint16_t size = 0;
@@ -214,6 +234,50 @@ namespace bgfx
 			{
 				size = bx::max(size, (uint16_t)(un.regIndex + un.regCount*16) );
 			}
+
+			uint8_t nameSize = (uint8_t)un.name.size();
+			bx::write(_shaderWriter, nameSize, &err);
+			bx::write(_shaderWriter, un.name.c_str(), nameSize, &err);
+			bx::write(_shaderWriter, uint8_t(un.type | fragmentBit), &err);
+			bx::write(_shaderWriter, un.num, &err);
+			bx::write(_shaderWriter, un.regIndex, &err);
+			bx::write(_shaderWriter, un.regCount, &err);
+			bx::write(_shaderWriter, un.texComponent, &err);
+			bx::write(_shaderWriter, un.texDimension, &err);
+			bx::write(_shaderWriter, un.texFormat, &err);
+
+			BX_TRACE("%s, %s, %d, %d, %d"
+				, un.name.c_str()
+				, getUniformTypeName(UniformType::Enum(un.type & ~kUniformMask))
+				, un.num
+				, un.regIndex
+				, un.regCount
+				);
+		}
+		return size;
+	}
+
+	// Metal variant of writeUniformArray. The uniform-record byte layout is identical
+	// to writeUniformArray; only the returned constant-buffer size differs -- Metal sums
+	// regCount*16 over every record (matching how the Metal runtime lays out its single
+	// argument buffer) rather than taking max(regIndex + regCount*16). Shared by the
+	// stock glslang Metal backend and the Slang Metal path so both agree byte-for-byte.
+	inline uint16_t writeUniformArrayMetal(bx::WriterI* _shaderWriter, const UniformArray& uniforms, bool isFragmentShader)
+	{
+		uint16_t size = 0;
+
+		bx::ErrorAssert err;
+
+		uint16_t count = uint16_t(uniforms.size() );
+		bx::write(_shaderWriter, count, &err);
+
+		uint32_t fragmentBit = isFragmentShader ? kUniformFragmentBit : 0;
+
+		for (uint16_t ii = 0; ii < count; ++ii)
+		{
+			const Uniform& un = uniforms[ii];
+
+			size += un.regCount*16;
 
 			uint8_t nameSize = (uint8_t)un.name.size();
 			bx::write(_shaderWriter, nameSize, &err);
@@ -303,11 +367,27 @@ namespace bgfx
 	bool compileGLSLShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
 	bool compileHLSLShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
 	bool compileDxilShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
+	// Appends the sampler / storage-image / storage-buffer uniform records reflected from
+	// bgfx-convention SPIR-V (texture N at binding N+kSpirvBindShift, its sampler at
+	// N+kSpirvBindShift+kSpirvSamplerShift -- used to detect comparison samplers). This is
+	// the single source of truth for resource reflection: the SPIR-V backend and the Metal
+	// backend both call it so their envelopes carry identical texture/sampler/image tables.
+	void reflectSpirvResourceUniforms(const std::vector<uint32_t>& _spirv, UniformArray& _uniforms);
+
 	bool compileMetalShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
+
+	// Emits the Metal (MSL) body of a compiled-shader envelope -- the uniform table,
+	// the compute threadgroup trailer, the MSL code blob, the vertex-attribute table
+	// and the constant-buffer size -- from bgfx-convention SPIR-V (UBO at binding
+	// kSpirv{Vertex,Fragment}Binding, textures at +kSpirvBindShift, samplers at
+	// +kSpirvBindShift+kSpirvSamplerShift). The envelope header (magic + varying
+	// hashes) is written by the caller. Shared by the stock glslang Metal backend and
+	// the Slang Metal path; _spirv is consumed (moved into SPIRV-Cross).
+	bool compileMetalShaderFromSpirv(const Options& _options, uint32_t _version, std::vector<uint32_t>& _spirv, const UniformArray& _uniforms, const std::vector<uint16_t>& _attrIds, bx::WriterI* _writer, bx::WriterI* _messages);
 	bool compilePSSLShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
 	bool compileSPIRVShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
 	bool compileWgslShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
-	bool compileSlangShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
+	bool compileSlangShader(const Options& _options, uint32_t _version, ShadingLang::Enum _targetLang, const std::string& _code, bx::WriterI* _writer, bx::WriterI* _messages);
 
 	const char* getPsslPreamble();
 
