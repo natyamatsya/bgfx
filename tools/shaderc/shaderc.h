@@ -90,6 +90,19 @@ namespace bgfx
 #define BGFX_CHUNK_MAGIC_FSH BX_MAKEFOURCC('F', 'S', 'H', BGFX_SHADER_BIN_VERSION)
 #define BGFX_CHUNK_MAGIC_VSH BX_MAKEFOURCC('V', 'S', 'H', BGFX_SHADER_BIN_VERSION)
 
+// Ray tracing stage chunk magics. Same <type>SH<version> FOURCC scheme as V/F/C:
+// the leading char is the stage discriminator (isShaderType). These reuse the
+// existing envelope body layout, so no version bump. The runtime rejects them via
+// isShaderBin today (there is no RT pipeline yet) -- they are offline artifacts a
+// future RT-runtime workstream will consume. R=raygen, I=intersection, A=any-hit,
+// H=closest-hit, M=miss, L=callable.
+#define BGFX_CHUNK_MAGIC_RSH BX_MAKEFOURCC('R', 'S', 'H', BGFX_SHADER_BIN_VERSION)
+#define BGFX_CHUNK_MAGIC_ISH BX_MAKEFOURCC('I', 'S', 'H', BGFX_SHADER_BIN_VERSION)
+#define BGFX_CHUNK_MAGIC_ASH BX_MAKEFOURCC('A', 'S', 'H', BGFX_SHADER_BIN_VERSION)
+#define BGFX_CHUNK_MAGIC_HSH BX_MAKEFOURCC('H', 'S', 'H', BGFX_SHADER_BIN_VERSION)
+#define BGFX_CHUNK_MAGIC_MSH BX_MAKEFOURCC('M', 'S', 'H', BGFX_SHADER_BIN_VERSION)
+#define BGFX_CHUNK_MAGIC_LSH BX_MAKEFOURCC('L', 'S', 'H', BGFX_SHADER_BIN_VERSION)
+
 namespace bgfx
 {
 	extern bool g_verbose;

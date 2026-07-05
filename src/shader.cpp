@@ -20,6 +20,9 @@ namespace bgfx
 		// unique and should not be changed if new DescriptorTypes are added.
 		{ DescriptorType::StorageBuffer, 0x0007 },
 		{ DescriptorType::StorageImage,  0x0003 },
+		// VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR (1000150000) does not fit a
+		// uint16 id, so acceleration structures get a stable bgfx-internal token.
+		{ DescriptorType::AccelerationStructure, 0x1000 },
 	};
 	static_assert(BX_COUNTOF(s_descriptorTypeToId) == DescriptorType::Count);
 
