@@ -2850,10 +2850,25 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 										MTL::DataType dataType = uniform->dataType();
 										uint32_t num = 1;
 
+										// Slang lays out std140 uniform arrays as a helper struct that wraps the
+										// array (e.g. "_Array_std140_vector_float_4_3" whose single member "data"
+										// is the real vec4 array); SPIRV-Cross reproduces it verbatim in MSL.
+										// Unwrap it so bgfx sees the underlying array. The wrapper carries no
+										// header and sits at the array's offset, so uniform->offset() still holds.
+										MTL::StructMember* arrayMember = uniform;
+										if (dataType == MTL::DataTypeStruct
+										&&  NULL != uniform->structType()
+										&&  NULL != uniform->structType()->members()
+										&&  1 == uniform->structType()->members()->count() )
+										{
+											arrayMember = (MTL::StructMember*)uniform->structType()->members()->object(0);
+											dataType = arrayMember->dataType();
+										}
+
 										if (dataType == MTL::DataTypeArray)
 										{
-											dataType = uniform->arrayType()->elementType();
-											num = (uint32_t)uniform->arrayType()->arrayLength();
+											dataType = arrayMember->arrayType()->elementType();
+											num = (uint32_t)arrayMember->arrayType()->arrayLength();
 										}
 
 										switch (dataType)
