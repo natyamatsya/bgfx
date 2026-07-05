@@ -2250,6 +2250,12 @@ pub const Init = extern struct {
         pub inline fn setImageView(self: ?*Encoder, _stage: u8, _handle: TextureHandle, _firstLayer: u16, _numLayers: u16, _mip: u8, _access: Access, _format: TextureFormat) void {
             return bgfx_encoder_set_image_view(self, _stage, _handle, _firstLayer, _numLayers, _mip, _access, _format);
         }
+        /// Set acceleration structure for compute (ray query).
+        /// <param name="_stage">Compute stage.</param>
+        /// <param name="_handle">Acceleration structure handle.</param>
+        pub inline fn setAccelerationStructure(self: ?*Encoder, _stage: u8, _handle: AccelerationStructureHandle) void {
+            return bgfx_encoder_set_acceleration_structure(self, _stage, _handle);
+        }
         /// Dispatch compute.
         /// <param name="_id">View id.</param>
         /// <param name="_program">Compute program.</param>
@@ -2298,6 +2304,10 @@ pub const Init = extern struct {
             return bgfx_encoder_blit(self, _id, _dst, _dstMip, _dstX, _dstY, _dstZ, _src, _srcMip, _srcX, _srcY, _srcZ, _width, _height, _depth);
         }
     };
+
+pub const AccelerationStructureHandle = extern struct {
+    idx: c_ushort,
+};
 
 pub const DynamicIndexBufferHandle = extern struct {
     idx: c_ushort,
@@ -2670,6 +2680,31 @@ pub inline fn destroyVertexLayout(_layoutHandle: VertexLayoutHandle) void {
     return bgfx_destroy_vertex_layout(_layoutHandle);
 }
 extern fn bgfx_destroy_vertex_layout(_layoutHandle: VertexLayoutHandle) void;
+
+/// Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+/// <param name="_vertexBuffer">Vertex buffer with the geometry positions.</param>
+/// <param name="_indexBuffer">Index buffer describing the triangles.</param>
+pub inline fn createBlas(_vertexBuffer: VertexBufferHandle, _indexBuffer: IndexBufferHandle) AccelerationStructureHandle {
+    return bgfx_create_blas(_vertexBuffer, _indexBuffer);
+}
+extern fn bgfx_create_blas(_vertexBuffer: VertexBufferHandle, _indexBuffer: IndexBufferHandle) AccelerationStructureHandle;
+
+/// Create a top-level acceleration structure (TLAS) with a single BLAS instance
+/// (identity transform).
+/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+/// <param name="_blas">Bottom-level acceleration structure to instance.</param>
+pub inline fn createTlas(_blas: AccelerationStructureHandle) AccelerationStructureHandle {
+    return bgfx_create_tlas(_blas);
+}
+extern fn bgfx_create_tlas(_blas: AccelerationStructureHandle) AccelerationStructureHandle;
+
+/// Destroy acceleration structure.
+/// <param name="_handle">Acceleration structure handle.</param>
+pub inline fn destroyAccelerationStructure(_handle: AccelerationStructureHandle) void {
+    return bgfx_destroy_acceleration_structure(_handle);
+}
+extern fn bgfx_destroy_acceleration_structure(_handle: AccelerationStructureHandle) void;
 
 /// Create static vertex buffer.
 /// <param name="_mem">Vertex buffer data.</param>
@@ -3866,6 +3901,11 @@ extern fn bgfx_encoder_set_image(self: ?*Encoder, _stage: u8, _handle: TextureHa
 /// <param name="_format">Texture format. See: `TextureFormat::Enum`.</param>
 extern fn bgfx_encoder_set_image_view(self: ?*Encoder, _stage: u8, _handle: TextureHandle, _firstLayer: u16, _numLayers: u16, _mip: u8, _access: Access, _format: TextureFormat) void;
 
+/// Set acceleration structure for compute (ray query).
+/// <param name="_stage">Compute stage.</param>
+/// <param name="_handle">Acceleration structure handle.</param>
+extern fn bgfx_encoder_set_acceleration_structure(self: ?*Encoder, _stage: u8, _handle: AccelerationStructureHandle) void;
+
 /// Dispatch compute.
 /// <param name="_id">View id.</param>
 /// <param name="_program">Compute program.</param>
@@ -4435,6 +4475,14 @@ pub inline fn setImageView(_stage: u8, _handle: TextureHandle, _firstLayer: u16,
     return bgfx_set_image_view(_stage, _handle, _firstLayer, _numLayers, _mip, _access, _format);
 }
 extern fn bgfx_set_image_view(_stage: u8, _handle: TextureHandle, _firstLayer: u16, _numLayers: u16, _mip: u8, _access: Access, _format: TextureFormat) void;
+
+/// Set acceleration structure for compute (ray query).
+/// <param name="_stage">Compute stage.</param>
+/// <param name="_handle">Acceleration structure handle.</param>
+pub inline fn setAccelerationStructure(_stage: u8, _handle: AccelerationStructureHandle) void {
+    return bgfx_set_acceleration_structure(_stage, _handle);
+}
+extern fn bgfx_set_acceleration_structure(_stage: u8, _handle: AccelerationStructureHandle) void;
 
 /// Dispatch compute.
 /// <param name="_id">View id.</param>

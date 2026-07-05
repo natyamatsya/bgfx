@@ -1089,6 +1089,8 @@ namespace bgfx
 			CreateVertexLayout,
 			CreateIndexBuffer,
 			CreateVertexBuffer,
+			CreateBlas,
+			CreateTlas,
 			CreateDynamicIndexBuffer,
 			UpdateDynamicIndexBuffer,
 			CreateDynamicVertexBuffer,
@@ -1109,6 +1111,7 @@ namespace bgfx
 			DestroyVertexLayout,
 			DestroyIndexBuffer,
 			DestroyVertexBuffer,
+			DestroyAccelerationStructure,
 			DestroyDynamicIndexBuffer,
 			DestroyDynamicVertexBuffer,
 			DestroyShader,
@@ -1972,6 +1975,7 @@ namespace bgfx
 			IndexBuffer,
 			VertexBuffer,
 			Texture,
+			AccelerationStructure,
 
 			Count
 		};
@@ -2055,6 +2059,19 @@ namespace bgfx
 			m_access     = uint8_t(_access);
 			m_firstMip   = _mip;
 			m_numMips    = 1;
+		}
+
+		void setAccelerationStructure(AccelerationStructureHandle _handle)
+		{
+			m_samplerFlags = BGFX_SAMPLER_NONE;
+			m_firstLayer   = 0;
+			m_numLayers    = UINT16_MAX;
+			m_idx      = _handle.idx;
+			m_type     = uint8_t(Binding::AccelerationStructure);
+			m_format   = 0;
+			m_access   = uint8_t(Access::Read);
+			m_firstMip = 0;
+			m_numMips  = UINT8_MAX;
 		}
 
 		uint32_t m_samplerFlags;
@@ -2969,6 +2986,11 @@ namespace bgfx
 			return m_freeVertexBuffer.queue(_handle);
 		}
 
+		bool free(AccelerationStructureHandle _handle)
+		{
+			return m_freeAccelerationStructure.queue(_handle);
+		}
+
 		bool free(ShaderHandle _handle)
 		{
 			return m_freeShader.queue(_handle);
@@ -2999,6 +3021,7 @@ namespace bgfx
 			m_freeIndexBuffer.reset();
 			m_freeVertexLayout.reset();
 			m_freeVertexBuffer.reset();
+			m_freeAccelerationStructure.reset();
 			m_freeShader.reset();
 			m_freeProgram.reset();
 			m_freeTexture.reset();
@@ -3109,6 +3132,7 @@ namespace bgfx
 		FreeHandle<IndexBufferHandle,  BGFX_CONFIG_MAX_INDEX_BUFFERS>  m_freeIndexBuffer;
 		FreeHandle<VertexLayoutHandle, BGFX_CONFIG_MAX_VERTEX_LAYOUTS> m_freeVertexLayout;
 		FreeHandle<VertexBufferHandle, BGFX_CONFIG_MAX_VERTEX_BUFFERS> m_freeVertexBuffer;
+		FreeHandle<AccelerationStructureHandle, BGFX_CONFIG_MAX_ACCELERATION_STRUCTURES> m_freeAccelerationStructure;
 		FreeHandle<ShaderHandle,       BGFX_CONFIG_MAX_SHADERS>        m_freeShader;
 		FreeHandle<ProgramHandle,      BGFX_CONFIG_MAX_PROGRAMS>       m_freeProgram;
 		FreeHandle<TextureHandle,      BGFX_CONFIG_MAX_TEXTURES>       m_freeTexture;
@@ -3550,6 +3574,13 @@ namespace bgfx
 			m_bindDirty = true;
 			Binding& bind = m_bind.m_bind[_stage];
 			bind.setImage(_handle, _firstLayer, _numLayers, _mip, _access, _format);
+		}
+
+		void setAccelerationStructure(uint8_t _stage, AccelerationStructureHandle _handle)
+		{
+			m_bindDirty = true;
+			Binding& bind = m_bind.m_bind[_stage];
+			bind.setAccelerationStructure(_handle);
 		}
 
 		void discard(uint8_t _flags)
@@ -4221,6 +4252,9 @@ namespace bgfx
 		virtual void destroyVertexLayout(VertexLayoutHandle _handle) = 0;
 		virtual void createVertexBuffer(VertexBufferHandle _handle, const Memory* _mem, VertexLayoutHandle _layoutHandle, uint16_t _flags) = 0;
 		virtual void destroyVertexBuffer(VertexBufferHandle _handle) = 0;
+		virtual void createBlas(AccelerationStructureHandle _handle, VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) = 0;
+		virtual void createTlas(AccelerationStructureHandle _handle, AccelerationStructureHandle _blas) = 0;
+		virtual void destroyAccelerationStructure(AccelerationStructureHandle _handle) = 0;
 		virtual void createDynamicIndexBuffer(IndexBufferHandle _handle, uint32_t _size, uint16_t _flags) = 0;
 		virtual void updateDynamicIndexBuffer(IndexBufferHandle _handle, uint32_t _offset, uint32_t _size, const Memory* _mem) = 0;
 		virtual void destroyDynamicIndexBuffer(IndexBufferHandle _handle) = 0;
@@ -4682,6 +4716,58 @@ namespace bgfx
 			}
 
 			m_vertexBufferHandle.free(_handle.idx);
+		}
+
+		BGFX_API_FUNC(AccelerationStructureHandle createBlas(VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) )
+		{
+			BGFX_MUTEX_SCOPE(m_resourceApiLock);
+
+			AccelerationStructureHandle handle = { m_accelerationStructureHandle.alloc() };
+			BX_WARN(isValid(handle), "Failed to allocate acceleration structure handle.");
+
+			if (isValid(handle) )
+			{
+				CommandBuffer& cmdbuf = getCommandBuffer(CommandBuffer::CreateBlas);
+				cmdbuf.write(handle);
+				cmdbuf.write(_vertexBuffer);
+				cmdbuf.write(_indexBuffer);
+			}
+
+			return handle;
+		}
+
+		BGFX_API_FUNC(AccelerationStructureHandle createTlas(AccelerationStructureHandle _blas) )
+		{
+			BGFX_MUTEX_SCOPE(m_resourceApiLock);
+
+			AccelerationStructureHandle handle = { m_accelerationStructureHandle.alloc() };
+			BX_WARN(isValid(handle), "Failed to allocate acceleration structure handle.");
+
+			if (isValid(handle) )
+			{
+				CommandBuffer& cmdbuf = getCommandBuffer(CommandBuffer::CreateTlas);
+				cmdbuf.write(handle);
+				cmdbuf.write(_blas);
+			}
+
+			return handle;
+		}
+
+		BGFX_API_FUNC(void destroyAccelerationStructure(AccelerationStructureHandle _handle) )
+		{
+			BGFX_MUTEX_SCOPE(m_resourceApiLock);
+
+			BGFX_CHECK_HANDLE("destroyAccelerationStructure", m_accelerationStructureHandle, _handle);
+			bool ok = m_submit->free(_handle); BX_UNUSED(ok);
+			BX_ASSERT(ok, "Acceleration structure handle %d is already destroyed!", _handle.idx);
+
+			CommandBuffer& cmdbuf = getCommandBuffer(CommandBuffer::DestroyAccelerationStructure);
+			cmdbuf.write(_handle);
+		}
+
+		void destroyAccelerationStructureInternal(AccelerationStructureHandle _handle)
+		{
+			m_accelerationStructureHandle.free(_handle.idx);
 		}
 
 		uint64_t allocDynamicIndexBuffer(uint32_t _size, uint16_t _flags)
@@ -6608,6 +6694,7 @@ namespace bgfx
 		bx::HandleAllocT<BGFX_CONFIG_MAX_VERTEX_LAYOUTS > m_layoutHandle;
 
 		bx::HandleAllocT<BGFX_CONFIG_MAX_VERTEX_BUFFERS> m_vertexBufferHandle;
+		bx::HandleAllocT<BGFX_CONFIG_MAX_ACCELERATION_STRUCTURES> m_accelerationStructureHandle;
 		bx::HandleAllocT<BGFX_CONFIG_MAX_SHADERS> m_shaderHandle;
 		bx::HandleAllocT<BGFX_CONFIG_MAX_PROGRAMS> m_programHandle;
 		bx::HandleAllocT<BGFX_CONFIG_MAX_TEXTURES> m_textureHandle;

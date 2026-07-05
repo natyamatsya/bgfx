@@ -2952,6 +2952,12 @@ public static class bgfx
 	}
 	
 	[CRepr]
+	public struct AccelerationStructureHandle {
+	    public uint16 idx;
+	    public bool Valid => idx != uint16.MaxValue;
+	}
+	
+	[CRepr]
 	public struct DynamicIndexBufferHandle {
 	    public uint16 idx;
 	    public bool Valid => idx != uint16.MaxValue;
@@ -3450,6 +3456,37 @@ public static class bgfx
 	///
 	[LinkName("bgfx_destroy_vertex_layout")]
 	public static extern void destroy_vertex_layout(VertexLayoutHandle _layoutHandle);
+	
+	/// <summary>
+	/// Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	/// </summary>
+	///
+	/// <param name="_vertexBuffer">Vertex buffer with the geometry positions.</param>
+	/// <param name="_indexBuffer">Index buffer describing the triangles.</param>
+	///
+	[LinkName("bgfx_create_blas")]
+	public static extern AccelerationStructureHandle create_blas(VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer);
+	
+	/// <summary>
+	/// Create a top-level acceleration structure (TLAS) with a single BLAS instance
+	/// (identity transform).
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	/// </summary>
+	///
+	/// <param name="_blas">Bottom-level acceleration structure to instance.</param>
+	///
+	[LinkName("bgfx_create_tlas")]
+	public static extern AccelerationStructureHandle create_tlas(AccelerationStructureHandle _blas);
+	
+	/// <summary>
+	/// Destroy acceleration structure.
+	/// </summary>
+	///
+	/// <param name="_handle">Acceleration structure handle.</param>
+	///
+	[LinkName("bgfx_destroy_acceleration_structure")]
+	public static extern void destroy_acceleration_structure(AccelerationStructureHandle _handle);
 	
 	/// <summary>
 	/// Create static vertex buffer.
@@ -4992,6 +5029,16 @@ public static class bgfx
 	public static extern void encoder_set_image_view(Encoder* _this, uint8 _stage, TextureHandle _handle, uint16 _firstLayer, uint16 _numLayers, uint8 _mip, Access _access, TextureFormat _format);
 	
 	/// <summary>
+	/// Set acceleration structure for compute (ray query).
+	/// </summary>
+	///
+	/// <param name="_stage">Compute stage.</param>
+	/// <param name="_handle">Acceleration structure handle.</param>
+	///
+	[LinkName("bgfx_encoder_set_acceleration_structure")]
+	public static extern void encoder_set_acceleration_structure(Encoder* _this, uint8 _stage, AccelerationStructureHandle _handle);
+	
+	/// <summary>
 	/// Dispatch compute.
 	/// </summary>
 	///
@@ -5667,6 +5714,16 @@ public static class bgfx
 	///
 	[LinkName("bgfx_set_image_view")]
 	public static extern void set_image_view(uint8 _stage, TextureHandle _handle, uint16 _firstLayer, uint16 _numLayers, uint8 _mip, Access _access, TextureFormat _format);
+	
+	/// <summary>
+	/// Set acceleration structure for compute (ray query).
+	/// </summary>
+	///
+	/// <param name="_stage">Compute stage.</param>
+	/// <param name="_handle">Acceleration structure handle.</param>
+	///
+	[LinkName("bgfx_set_acceleration_structure")]
+	public static extern void set_acceleration_structure(uint8 _stage, AccelerationStructureHandle _handle);
 	
 	/// <summary>
 	/// Dispatch compute.

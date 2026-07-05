@@ -2908,6 +2908,11 @@ public static partial class bgfx
 	{
 	}
 	
+	public struct AccelerationStructureHandle {
+	    public ushort idx;
+	    public bool Valid => idx != UInt16.MaxValue;
+	}
+	
 	public struct DynamicIndexBufferHandle {
 	    public ushort idx;
 	    public bool Valid => idx != UInt16.MaxValue;
@@ -3396,6 +3401,37 @@ public static partial class bgfx
 	///
 	[DllImport(DllName, EntryPoint="bgfx_destroy_vertex_layout", CallingConvention = CallingConvention.Cdecl)]
 	public static extern unsafe void destroy_vertex_layout(VertexLayoutHandle _layoutHandle);
+	
+	/// <summary>
+	/// Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	/// </summary>
+	///
+	/// <param name="_vertexBuffer">Vertex buffer with the geometry positions.</param>
+	/// <param name="_indexBuffer">Index buffer describing the triangles.</param>
+	///
+	[DllImport(DllName, EntryPoint="bgfx_create_blas", CallingConvention = CallingConvention.Cdecl)]
+	public static extern unsafe AccelerationStructureHandle create_blas(VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer);
+	
+	/// <summary>
+	/// Create a top-level acceleration structure (TLAS) with a single BLAS instance
+	/// (identity transform).
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	/// </summary>
+	///
+	/// <param name="_blas">Bottom-level acceleration structure to instance.</param>
+	///
+	[DllImport(DllName, EntryPoint="bgfx_create_tlas", CallingConvention = CallingConvention.Cdecl)]
+	public static extern unsafe AccelerationStructureHandle create_tlas(AccelerationStructureHandle _blas);
+	
+	/// <summary>
+	/// Destroy acceleration structure.
+	/// </summary>
+	///
+	/// <param name="_handle">Acceleration structure handle.</param>
+	///
+	[DllImport(DllName, EntryPoint="bgfx_destroy_acceleration_structure", CallingConvention = CallingConvention.Cdecl)]
+	public static extern unsafe void destroy_acceleration_structure(AccelerationStructureHandle _handle);
 	
 	/// <summary>
 	/// Create static vertex buffer.
@@ -4942,6 +4978,16 @@ public static partial class bgfx
 	public static extern unsafe void encoder_set_image_view(Encoder* _this, byte _stage, TextureHandle _handle, ushort _firstLayer, ushort _numLayers, byte _mip, Access _access, TextureFormat _format);
 	
 	/// <summary>
+	/// Set acceleration structure for compute (ray query).
+	/// </summary>
+	///
+	/// <param name="_stage">Compute stage.</param>
+	/// <param name="_handle">Acceleration structure handle.</param>
+	///
+	[DllImport(DllName, EntryPoint="bgfx_encoder_set_acceleration_structure", CallingConvention = CallingConvention.Cdecl)]
+	public static extern unsafe void encoder_set_acceleration_structure(Encoder* _this, byte _stage, AccelerationStructureHandle _handle);
+	
+	/// <summary>
 	/// Dispatch compute.
 	/// </summary>
 	///
@@ -5617,6 +5663,16 @@ public static partial class bgfx
 	///
 	[DllImport(DllName, EntryPoint="bgfx_set_image_view", CallingConvention = CallingConvention.Cdecl)]
 	public static extern unsafe void set_image_view(byte _stage, TextureHandle _handle, ushort _firstLayer, ushort _numLayers, byte _mip, Access _access, TextureFormat _format);
+	
+	/// <summary>
+	/// Set acceleration structure for compute (ray query).
+	/// </summary>
+	///
+	/// <param name="_stage">Compute stage.</param>
+	/// <param name="_handle">Acceleration structure handle.</param>
+	///
+	[DllImport(DllName, EntryPoint="bgfx_set_acceleration_structure", CallingConvention = CallingConvention.Cdecl)]
+	public static extern unsafe void set_acceleration_structure(byte _stage, AccelerationStructureHandle _handle);
 	
 	/// <summary>
 	/// Dispatch compute.

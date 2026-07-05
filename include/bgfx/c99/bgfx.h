@@ -534,6 +534,8 @@ typedef struct bgfx_callback_vtbl_s
 
 } bgfx_callback_vtbl_t;
 
+typedef struct bgfx_acceleration_structure_handle_s { uint16_t idx; } bgfx_acceleration_structure_handle_t;
+
 typedef struct bgfx_dynamic_index_buffer_handle_s { uint16_t idx; } bgfx_dynamic_index_buffer_handle_t;
 
 typedef struct bgfx_dynamic_vertex_buffer_handle_s { uint16_t idx; } bgfx_dynamic_vertex_buffer_handle_t;
@@ -1626,6 +1628,38 @@ BGFX_C_API bgfx_vertex_layout_handle_t bgfx_create_vertex_layout(const bgfx_vert
  *
  */
 BGFX_C_API void bgfx_destroy_vertex_layout(bgfx_vertex_layout_handle_t _layoutHandle);
+
+/**
+ * Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+ * @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+ *
+ * @param[in] _vertexBuffer Vertex buffer with the geometry positions.
+ * @param[in] _indexBuffer Index buffer describing the triangles.
+ *
+ * @returns Acceleration structure handle.
+ *
+ */
+BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_blas(bgfx_vertex_buffer_handle_t _vertexBuffer, bgfx_index_buffer_handle_t _indexBuffer);
+
+/**
+ * Create a top-level acceleration structure (TLAS) with a single BLAS instance
+ * (identity transform).
+ * @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+ *
+ * @param[in] _blas Bottom-level acceleration structure to instance.
+ *
+ * @returns Acceleration structure handle.
+ *
+ */
+BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_tlas(bgfx_acceleration_structure_handle_t _blas);
+
+/**
+ * Destroy acceleration structure.
+ *
+ * @param[in] _handle Acceleration structure handle.
+ *
+ */
+BGFX_C_API void bgfx_destroy_acceleration_structure(bgfx_acceleration_structure_handle_t _handle);
 
 /**
  * Create static vertex buffer.
@@ -3273,6 +3307,15 @@ BGFX_C_API void bgfx_encoder_set_image(bgfx_encoder_t* _this, uint8_t _stage, bg
 BGFX_C_API void bgfx_encoder_set_image_view(bgfx_encoder_t* _this, uint8_t _stage, bgfx_texture_handle_t _handle, uint16_t _firstLayer, uint16_t _numLayers, uint8_t _mip, bgfx_access_t _access, bgfx_texture_format_t _format);
 
 /**
+ * Set acceleration structure for compute (ray query).
+ *
+ * @param[in] _stage Compute stage.
+ * @param[in] _handle Acceleration structure handle.
+ *
+ */
+BGFX_C_API void bgfx_encoder_set_acceleration_structure(bgfx_encoder_t* _this, uint8_t _stage, bgfx_acceleration_structure_handle_t _handle);
+
+/**
  * Dispatch compute.
  *
  * @param[in] _id View id.
@@ -3941,6 +3984,15 @@ BGFX_C_API void bgfx_set_image(uint8_t _stage, bgfx_texture_handle_t _handle, ui
 BGFX_C_API void bgfx_set_image_view(uint8_t _stage, bgfx_texture_handle_t _handle, uint16_t _firstLayer, uint16_t _numLayers, uint8_t _mip, bgfx_access_t _access, bgfx_texture_format_t _format);
 
 /**
+ * Set acceleration structure for compute (ray query).
+ *
+ * @param[in] _stage Compute stage.
+ * @param[in] _handle Acceleration structure handle.
+ *
+ */
+BGFX_C_API void bgfx_set_acceleration_structure(uint8_t _stage, bgfx_acceleration_structure_handle_t _handle);
+
+/**
  * Dispatch compute.
  *
  * @param[in] _id View id.
@@ -4045,6 +4097,9 @@ typedef enum bgfx_function_id
     BGFX_FUNCTION_ID_DESTROY_INDEX_BUFFER,
     BGFX_FUNCTION_ID_CREATE_VERTEX_LAYOUT,
     BGFX_FUNCTION_ID_DESTROY_VERTEX_LAYOUT,
+    BGFX_FUNCTION_ID_CREATE_BLAS,
+    BGFX_FUNCTION_ID_CREATE_TLAS,
+    BGFX_FUNCTION_ID_DESTROY_ACCELERATION_STRUCTURE,
     BGFX_FUNCTION_ID_CREATE_VERTEX_BUFFER,
     BGFX_FUNCTION_ID_SET_VERTEX_BUFFER_NAME,
     BGFX_FUNCTION_ID_DESTROY_VERTEX_BUFFER,
@@ -4161,6 +4216,7 @@ typedef enum bgfx_function_id
     BGFX_FUNCTION_ID_ENCODER_SET_COMPUTE_INDIRECT_BUFFER,
     BGFX_FUNCTION_ID_ENCODER_SET_IMAGE,
     BGFX_FUNCTION_ID_ENCODER_SET_IMAGE_VIEW,
+    BGFX_FUNCTION_ID_ENCODER_SET_ACCELERATION_STRUCTURE,
     BGFX_FUNCTION_ID_ENCODER_DISPATCH,
     BGFX_FUNCTION_ID_ENCODER_DISPATCH_INDIRECT,
     BGFX_FUNCTION_ID_ENCODER_DISCARD,
@@ -4209,6 +4265,7 @@ typedef enum bgfx_function_id
     BGFX_FUNCTION_ID_SET_COMPUTE_INDIRECT_BUFFER,
     BGFX_FUNCTION_ID_SET_IMAGE,
     BGFX_FUNCTION_ID_SET_IMAGE_VIEW,
+    BGFX_FUNCTION_ID_SET_ACCELERATION_STRUCTURE,
     BGFX_FUNCTION_ID_DISPATCH,
     BGFX_FUNCTION_ID_DISPATCH_INDIRECT,
     BGFX_FUNCTION_ID_DISCARD,
@@ -4260,6 +4317,9 @@ struct bgfx_interface_vtbl
     void (*destroy_index_buffer)(bgfx_index_buffer_handle_t _handle);
     bgfx_vertex_layout_handle_t (*create_vertex_layout)(const bgfx_vertex_layout_t * _layout);
     void (*destroy_vertex_layout)(bgfx_vertex_layout_handle_t _layoutHandle);
+    bgfx_acceleration_structure_handle_t (*create_blas)(bgfx_vertex_buffer_handle_t _vertexBuffer, bgfx_index_buffer_handle_t _indexBuffer);
+    bgfx_acceleration_structure_handle_t (*create_tlas)(bgfx_acceleration_structure_handle_t _blas);
+    void (*destroy_acceleration_structure)(bgfx_acceleration_structure_handle_t _handle);
     bgfx_vertex_buffer_handle_t (*create_vertex_buffer)(const bgfx_memory_t* _mem, const bgfx_vertex_layout_t * _layout, uint16_t _flags);
     void (*set_vertex_buffer_name)(bgfx_vertex_buffer_handle_t _handle, const char* _name, int32_t _len);
     void (*destroy_vertex_buffer)(bgfx_vertex_buffer_handle_t _handle);
@@ -4376,6 +4436,7 @@ struct bgfx_interface_vtbl
     void (*encoder_set_compute_indirect_buffer)(bgfx_encoder_t* _this, uint8_t _stage, bgfx_indirect_buffer_handle_t _handle, bgfx_access_t _access);
     void (*encoder_set_image)(bgfx_encoder_t* _this, uint8_t _stage, bgfx_texture_handle_t _handle, uint8_t _mip, bgfx_access_t _access, bgfx_texture_format_t _format);
     void (*encoder_set_image_view)(bgfx_encoder_t* _this, uint8_t _stage, bgfx_texture_handle_t _handle, uint16_t _firstLayer, uint16_t _numLayers, uint8_t _mip, bgfx_access_t _access, bgfx_texture_format_t _format);
+    void (*encoder_set_acceleration_structure)(bgfx_encoder_t* _this, uint8_t _stage, bgfx_acceleration_structure_handle_t _handle);
     void (*encoder_dispatch)(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags);
     void (*encoder_dispatch_indirect)(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint32_t _start, uint32_t _num, uint8_t _flags);
     void (*encoder_discard)(bgfx_encoder_t* _this, uint8_t _flags);
@@ -4424,6 +4485,7 @@ struct bgfx_interface_vtbl
     void (*set_compute_indirect_buffer)(uint8_t _stage, bgfx_indirect_buffer_handle_t _handle, bgfx_access_t _access);
     void (*set_image)(uint8_t _stage, bgfx_texture_handle_t _handle, uint8_t _mip, bgfx_access_t _access, bgfx_texture_format_t _format);
     void (*set_image_view)(uint8_t _stage, bgfx_texture_handle_t _handle, uint16_t _firstLayer, uint16_t _numLayers, uint8_t _mip, bgfx_access_t _access, bgfx_texture_format_t _format);
+    void (*set_acceleration_structure)(uint8_t _stage, bgfx_acceleration_structure_handle_t _handle);
     void (*dispatch)(bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags);
     void (*dispatch_indirect)(bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint32_t _start, uint32_t _num, uint8_t _flags);
     void (*discard)(uint8_t _flags);

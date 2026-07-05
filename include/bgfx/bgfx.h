@@ -519,6 +519,7 @@ namespace bgfx
 	/// View id.
 	typedef uint16_t ViewId;
 
+	BGFX_HANDLE(AccelerationStructureHandle)
 	BGFX_HANDLE(DynamicIndexBufferHandle)
 	BGFX_HANDLE(DynamicVertexBufferHandle)
 	BGFX_HANDLE(FrameBufferHandle)
@@ -1764,6 +1765,18 @@ namespace bgfx
 			, TextureFormat::Enum _format = TextureFormat::Count
 			);
 
+		/// Set acceleration structure for compute (ray query).
+		///
+		/// @param[in] _stage Compute stage.
+		/// @param[in] _handle Acceleration structure handle.
+		///
+		/// @attention C99's equivalent binding is `bgfx_encoder_set_acceleration_structure`.
+		///
+		void setAccelerationStructure(
+			  uint8_t _stage
+			, AccelerationStructureHandle _handle
+			);
+
 		/// Dispatch compute.
 		///
 		/// @param[in] _id View id.
@@ -2554,6 +2567,43 @@ namespace bgfx
 	/// @attention C99's equivalent binding is `bgfx_destroy_vertex_layout`.
 	///
 	void destroy(VertexLayoutHandle _layoutHandle);
+
+	/// Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+	///
+	/// @param[in] _vertexBuffer Vertex buffer with the geometry positions.
+	/// @param[in] _indexBuffer Index buffer describing the triangles.
+	///
+	/// @returns Acceleration structure handle.
+	///
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	///
+	/// @attention C99's equivalent binding is `bgfx_create_blas`.
+	///
+	AccelerationStructureHandle createBlas(
+		  VertexBufferHandle _vertexBuffer
+		, IndexBufferHandle _indexBuffer
+		);
+
+	/// Create a top-level acceleration structure (TLAS) with a single BLAS instance
+	/// (identity transform).
+	///
+	/// @param[in] _blas Bottom-level acceleration structure to instance.
+	///
+	/// @returns Acceleration structure handle.
+	///
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	///
+	/// @attention C99's equivalent binding is `bgfx_create_tlas`.
+	///
+	AccelerationStructureHandle createTlas(AccelerationStructureHandle _blas);
+
+	/// Destroy acceleration structure.
+	///
+	/// @param[in] _handle Acceleration structure handle.
+	///
+	/// @attention C99's equivalent binding is `bgfx_destroy_acceleration_structure`.
+	///
+	void destroy(AccelerationStructureHandle _handle);
 
 	/// Create static vertex buffer.
 	///
@@ -4821,6 +4871,18 @@ namespace bgfx
 		, uint8_t _mip
 		, Access::Enum _access
 		, TextureFormat::Enum _format = TextureFormat::Count
+		);
+
+	/// Set acceleration structure for compute (ray query).
+	///
+	/// @param[in] _stage Compute stage.
+	/// @param[in] _handle Acceleration structure handle.
+	///
+	/// @attention C99's equivalent binding is `bgfx_set_acceleration_structure`.
+	///
+	void setAccelerationStructure(
+		  uint8_t _stage
+		, AccelerationStructureHandle _handle
 		);
 
 	/// Dispatch compute.
