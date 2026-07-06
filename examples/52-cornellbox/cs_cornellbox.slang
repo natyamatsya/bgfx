@@ -25,8 +25,12 @@ RWTexture2D<float4> s_irr    : register(u4); // stage 4: demodulated irradiance 
 // w = render stage (0 = simple RT, 1 = simple PT, 2 = PT + denoiser).
 uniform float4 u_params;
 
-// x = samples per pixel per frame, y = max path bounces (quality vs frame-time controls).
+// x = samples per pixel per frame, y = max path bounces, z = box rotation delta since
+// last frame (radians; for ReSTIR reservoir reprojection).
 uniform float4 u_ptParams;
+
+RWTexture2D<float4> s_resPrev : register(u5); // stage 5: ReSTIR reservoirs in  (lp.xz, W, M)
+RWTexture2D<float4> s_resNew  : register(u6); // stage 6: ReSTIR reservoirs out
 
 static const float kInf = 1e30;
 static const float kEps = 1e-3;
@@ -161,7 +165,76 @@ float3 directLight(float3 ro, float3 rd)
 
 // --- stages 1+2: path tracing (same estimator as the RT path) ----------------------------
 
-float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim)
+
+// --- stage 3: ReSTIR DI for the primary-vertex direct lighting ---------------------------
+// Weighted reservoir sampling of the area-light point: 8 fresh candidates, merged with the
+// reprojected previous-frame reservoir of this pixel and two jittered neighbours
+// (spatiotemporal reuse). Only the final selected sample pays a visibility ray. The
+// history M is clamped so stale reservoirs cannot dominate; on reset (u_params.y) reuse is
+// skipped. The pixel-constant factors dropped from restirPHat are applied here.
+float3 restirDirect(float3 p, float3 n, float3 albedo, int inst, int2 px, float delta, bool writeOut, inout uint rng)
+{
+	Reservoir r = emptyReservoir();
+	float wSum = 0.0;
+
+	for (int i = 0; i < 8; ++i)
+	{
+		float2 cand = float2(
+			  lerp(kLightLo.x, kLightHi.x, rnd(rng))
+			, lerp(kLightLo.z, kLightHi.z, rnd(rng))
+			);
+		streamCandidate(r, wSum, cand, restirPHat(p, n, cand), rng);
+	}
+
+	if (u_params.y < 0.5)
+	{
+		float2 res = float2(imageSize(s_target) );
+		float2 pf = reprojectPixel(p, inst, delta, res);
+		if (pf.x > -1e5)
+		{
+			int2 prevPx = int2(floor(pf + 0.5) );
+			for (int k = 0; k < 3; ++k)
+			{
+				int2 tap = prevPx;
+				if (k > 0)
+				{
+					tap += int2(int(rnd(rng)*21.0) - 10, int(rnd(rng)*21.0) - 10);
+				}
+				if (tap.x < 0 || tap.y < 0 || tap.x >= int(res.x) || tap.y >= int(res.y) ) continue;
+
+				float4 e = s_resPrev[tap];
+				Reservoir o;
+				o.lp = e.xy;
+				o.W  = e.z;
+				o.M  = min(e.w, 160.0); // clamp history (20x the 8 fresh candidates)
+				if (o.M > 0.0 && o.W > 0.0)
+				{
+					streamReservoir(r, wSum, o, restirPHat(p, n, o.lp), rng);
+				}
+			}
+		}
+	}
+
+	float pSel = restirPHat(p, n, r.lp);
+	r.W = pSel > 1e-6 ? wSum / max(r.M * pSel, 1e-6) : 0.0;
+
+	if (writeOut)
+	{
+		s_resNew[px] = float4(r.lp, r.W, r.M);
+	}
+
+	if (r.W <= 0.0 || pSel <= 1e-6) return float3(0, 0, 0);
+
+	float3 lpos = float3(r.lp.x, kLightLo.y, r.lp.y);
+	float3 toL = lpos - p;
+	float dist = length(toL);
+	float3 wi = toL / dist;
+	if (occluded(p + n*kShadowBias, wi, dist) ) return float3(0, 0, 0);
+
+	return (albedo / kPi) * kLightEmission * (pSel * kLightArea * r.W);
+}
+
+float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim, bool useRestir, int2 px)
 {
 	float3 radiance   = float3(0, 0, 0);
 	float3 throughput = float3(1, 1, 1);
@@ -197,6 +270,16 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim)
 			prim.inst   = h.inst;
 		}
 
+		// Direct lighting: ReSTIR at the primary vertex in stage 3, otherwise NEE.
+		if (bounce == 0 && useRestir)
+		{
+			radiance += throughput * restirDirect(p, h.n, h.albedo, h.inst, px, u_ptParams.z, true, rng);
+			rd = cosineSample(h.n, rnd(rng), rnd(rng) );
+			ro = p + h.n*kShadowBias;
+			throughput *= h.albedo;
+			continue;
+		}
+
 		// Next-event estimation: sample a point on the area light.
 		float3 lp = sampleLightPoint(rng);
 		float3 toL = lp - p;
@@ -228,6 +311,7 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 	if (float(dtid.x) >= res.x || float(dtid.y) >= res.y) return;
 
 	const int mode = int(u_params.w);
+	const bool useRestir = mode == 3;
 
 	uint rng = pcgHash(dtid.y*9781u + dtid.x + pcgHash(uint(u_params.x)*2971u) );
 
@@ -248,7 +332,7 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 		float2 jitter = float2(rnd(rng), rnd(rng) );
 		float3 rd = primaryRay(float2(dtid.xy), jitter, res);
 		Primary p;
-		sampleSum += pathTrace(kEye, rd, rng, p);
+		sampleSum += pathTrace(kEye, rd, rng, p, useRestir && s == 0, int2(dtid.xy) );
 		if (s == 0) prim = p;
 	}
 

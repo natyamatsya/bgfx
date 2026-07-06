@@ -12,10 +12,18 @@ denoised real-time path tracing:
    Noise-free baseline; what "ray tracing works" looks like.
 2. **Simple PT** — the progressive path tracer. Converges when still; raw 1 sample/pixel
    noise while the boxes rotate.
-3. **PT + à-trous denoiser** — the same path tracer, but the albedo-demodulated irradiance
-   is filtered by 4 edge-aware à-trous wavelet passes (SVGF-style, guided by a primary-hit
-   normal/depth G-buffer) before re-modulation and tonemapping. 1 sample/pixel becomes a
-   clean image in motion.
+3. **PT + SVGF denoiser** — the same path tracer plus the full SVGF pipeline: temporal
+   reprojection with validated bilinear history and variance clamping, then 4 edge-aware
+   à-trous wavelet passes whose filter width is guided by a temporally-accumulated
+   per-pixel variance estimate (plus normal/depth edge-stopping from a primary-hit
+   G-buffer). 1 sample/pixel becomes a clean image in motion, and a converged image stays
+   sharp because the filter shuts off where variance is low.
+4. **PT + ReSTIR DI + denoiser** — stage 3 with the primary-vertex direct lighting
+   resampled by ReSTIR: 8 fresh area-light candidates merged with the reprojected
+   previous-frame reservoirs of this pixel and two neighbours (spatiotemporal reuse,
+   M-clamped), one visibility ray for the selected sample. With a single area light the
+   win is modest (cleaner soft shadows); the algorithm is the point — with many lights it
+   becomes decisive.
 
 Two rendering paths share the scene and all three stages (the estimator: next-event
 estimation toward the ceiling area light + cosine-weighted diffuse bounces), selected at
