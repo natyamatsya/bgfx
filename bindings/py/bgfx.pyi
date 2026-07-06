@@ -1088,6 +1088,8 @@ class CapsFlags(enum.IntFlag):
 	ViewportLayerArray = 0x800000
 	# Ray tracing is supported.
 	RayTracing = 0x1000000
+	# Ray tracing pipelines (raygen/miss/hit shaders) are supported.
+	RayTracingPipeline = 0x2000000
 
 class CapsFormatFlags(enum.IntFlag):
 	# Texture format is not supported.
@@ -1880,6 +1882,12 @@ class VertexLayout(ctypes.Structure):
 class Encoder(ctypes.Structure):
 	pass
 
+class AccelerationStructureHandle(ctypes.Structure):
+	idx: int
+
+	@property
+	def valid(self) -> bool: ...
+
 class DynamicIndexBufferHandle(ctypes.Structure):
 	idx: int
 
@@ -2222,6 +2230,38 @@ def bgfx_create_vertex_layout(_layout: Optional[Union[VertexLayout, _Pointer[Ver
 
 # Destroy vertex layout.
 def bgfx_destroy_vertex_layout(_layoutHandle: VertexLayoutHandle, /) -> None: ...
+
+# Create a bottom-level acceleration structure (BLAS) from one or more triangle
+# geometries. Built refit-capable: after the contents of the vertex buffers change
+# (e.g. deformed by a compute shader via `BGFX_BUFFER_COMPUTE_WRITE`), call `updateBlas`.
+# @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+def bgfx_create_blas(_vertexBuffers: Optional[Union[VertexBufferHandle, _Pointer[VertexBufferHandle], ctypes.Array]], _indexBuffers: Optional[Union[IndexBufferHandle, _Pointer[IndexBufferHandle], ctypes.Array]], _num: int, /) -> AccelerationStructureHandle: ...
+
+# Refit a bottom-level acceleration structure after its source vertex buffers changed.
+# Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
+# referencing this BLAS should be updated afterwards (see `updateTlas`).
+# @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+def bgfx_update_blas(_handle: AccelerationStructureHandle, /) -> None: ...
+
+# Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
+# acceleration structures. All instances start with the identity transform; use
+# `updateTlas` to set per-instance transforms.
+# @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+def bgfx_create_tlas(_blases: Optional[Union[AccelerationStructureHandle, _Pointer[AccelerationStructureHandle], ctypes.Array]], _num: int, /) -> AccelerationStructureHandle: ...
+
+# Update the per-instance transforms of a top-level acceleration structure and rebuild
+# it in place.
+# @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+def bgfx_update_tlas(_handle: AccelerationStructureHandle, _mem: Optional[Union[Memory, _Pointer[Memory], ctypes.Array]], /) -> None: ...
+
+# Create a ray-tracing pipeline program from a ray-generation, a miss, and a (triangle)
+# closest-hit shader. Dispatch with `dispatch`; for a ray-tracing program the dispatch
+# dimensions are the ray-grid size in RAYS (not workgroups).
+# @attention Availability depends on: `BGFX_CAPS_RAY_TRACING_PIPELINE`.
+def bgfx_create_rt_program(_rayGen: ShaderHandle, _miss: ShaderHandle, _closestHit: ShaderHandle, _destroyShaders: bool, /) -> ProgramHandle: ...
+
+# Destroy acceleration structure.
+def bgfx_destroy_acceleration_structure(_handle: AccelerationStructureHandle, /) -> None: ...
 
 # Create static vertex buffer.
 def bgfx_create_vertex_buffer(_mem: Optional[Union[Memory, _Pointer[Memory], ctypes.Array]], _layout: Optional[Union[VertexLayout, _Pointer[VertexLayout], ctypes.Array]], _flags: int, /) -> VertexBufferHandle: ...
@@ -3065,6 +3105,9 @@ def bgfx_encoder_set_image_view(
 	/,
 ) -> None: ...
 
+# Set acceleration structure for compute (ray query).
+def bgfx_encoder_set_acceleration_structure(_this: Optional[Union[Encoder, _Pointer[Encoder], ctypes.Array]], _stage: int, _handle: AccelerationStructureHandle, /) -> None: ...
+
 # Dispatch compute.
 def bgfx_encoder_dispatch(
 	_this: Optional[Union[Encoder, _Pointer[Encoder], ctypes.Array]],
@@ -3433,6 +3476,9 @@ def bgfx_set_image_view(
 	_format: Union[TextureFormat, int],
 	/,
 ) -> None: ...
+
+# Set acceleration structure for compute (ray query).
+def bgfx_set_acceleration_structure(_stage: int, _handle: AccelerationStructureHandle, /) -> None: ...
 
 # Dispatch compute.
 def bgfx_dispatch(

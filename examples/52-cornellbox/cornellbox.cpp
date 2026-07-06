@@ -298,7 +298,7 @@ public:
 				m_ibh[ii] = bgfx::createIndexBuffer(
 					  bgfx::copy(mesh.m_indices.data(), uint32_t(mesh.m_indices.size()*sizeof(uint16_t) ) )
 					);
-				m_blas[ii] = bgfx::createBlas(m_vbh[ii], m_ibh[ii]);
+				m_blas[ii] = bgfx::createBlas(&m_vbh[ii], &m_ibh[ii], 1);
 				materials.insert(materials.end(), mesh.m_materials.begin(), mesh.m_materials.end() );
 			}
 

@@ -123,6 +123,18 @@ public final class Bgfx {
 		"bgfx_create_vertex_layout", FunctionDescriptor.of(VertexLayoutHandle.LAYOUT, ValueLayout.ADDRESS));
 	static final MethodHandle MH_DESTROY_VERTEX_LAYOUT = downcall(
 		"bgfx_destroy_vertex_layout", FunctionDescriptor.ofVoid(VertexLayoutHandle.LAYOUT));
+	static final MethodHandle MH_CREATE_BLAS = downcall(
+		"bgfx_create_blas", FunctionDescriptor.of(AccelerationStructureHandle.LAYOUT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_SHORT));
+	static final MethodHandle MH_UPDATE_BLAS = downcall(
+		"bgfx_update_blas", FunctionDescriptor.ofVoid(AccelerationStructureHandle.LAYOUT));
+	static final MethodHandle MH_CREATE_TLAS = downcall(
+		"bgfx_create_tlas", FunctionDescriptor.of(AccelerationStructureHandle.LAYOUT, ValueLayout.ADDRESS, ValueLayout.JAVA_SHORT));
+	static final MethodHandle MH_UPDATE_TLAS = downcall(
+		"bgfx_update_tlas", FunctionDescriptor.ofVoid(AccelerationStructureHandle.LAYOUT, ValueLayout.ADDRESS));
+	static final MethodHandle MH_CREATE_RT_PROGRAM = downcall(
+		"bgfx_create_rt_program", FunctionDescriptor.of(ProgramHandle.LAYOUT, ShaderHandle.LAYOUT, ShaderHandle.LAYOUT, ShaderHandle.LAYOUT, ValueLayout.JAVA_BOOLEAN));
+	static final MethodHandle MH_DESTROY_ACCELERATION_STRUCTURE = downcall(
+		"bgfx_destroy_acceleration_structure", FunctionDescriptor.ofVoid(AccelerationStructureHandle.LAYOUT));
 	static final MethodHandle MH_CREATE_VERTEX_BUFFER = downcall(
 		"bgfx_create_vertex_buffer", FunctionDescriptor.of(VertexBufferHandle.LAYOUT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_SHORT));
 	static final MethodHandle MH_SET_VERTEX_BUFFER_NAME = downcall(
@@ -369,6 +381,8 @@ public final class Bgfx {
 		"bgfx_encoder_set_image", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_BYTE, TextureHandle.LAYOUT, ValueLayout.JAVA_BYTE, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
 	static final MethodHandle MH_ENCODER_SET_IMAGE_VIEW = downcall(
 		"bgfx_encoder_set_image_view", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_BYTE, TextureHandle.LAYOUT, ValueLayout.JAVA_SHORT, ValueLayout.JAVA_SHORT, ValueLayout.JAVA_BYTE, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+	static final MethodHandle MH_ENCODER_SET_ACCELERATION_STRUCTURE = downcall(
+		"bgfx_encoder_set_acceleration_structure", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_BYTE, AccelerationStructureHandle.LAYOUT));
 	static final MethodHandle MH_ENCODER_DISPATCH = downcall(
 		"bgfx_encoder_dispatch", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_SHORT, ProgramHandle.LAYOUT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_BYTE));
 	static final MethodHandle MH_ENCODER_DISPATCH_INDIRECT = downcall(
@@ -473,6 +487,8 @@ public final class Bgfx {
 		"bgfx_set_image", FunctionDescriptor.ofVoid(ValueLayout.JAVA_BYTE, TextureHandle.LAYOUT, ValueLayout.JAVA_BYTE, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
 	static final MethodHandle MH_SET_IMAGE_VIEW = downcall(
 		"bgfx_set_image_view", FunctionDescriptor.ofVoid(ValueLayout.JAVA_BYTE, TextureHandle.LAYOUT, ValueLayout.JAVA_SHORT, ValueLayout.JAVA_SHORT, ValueLayout.JAVA_BYTE, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+	static final MethodHandle MH_SET_ACCELERATION_STRUCTURE = downcall(
+		"bgfx_set_acceleration_structure", FunctionDescriptor.ofVoid(ValueLayout.JAVA_BYTE, AccelerationStructureHandle.LAYOUT));
 	static final MethodHandle MH_DISPATCH = downcall(
 		"bgfx_dispatch", FunctionDescriptor.ofVoid(ValueLayout.JAVA_SHORT, ProgramHandle.LAYOUT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_BYTE));
 	static final MethodHandle MH_DISPATCH_INDIRECT = downcall(
@@ -984,6 +1000,114 @@ public final class Bgfx {
 		try {
 			try (Arena arena = Arena.ofConfined()) {
 				MH_DESTROY_VERTEX_LAYOUT.invokeExact(_layoutHandle.allocate(arena));
+			}
+		} catch (Throwable ex) {
+			throw invocationFailure(ex);
+		}
+	}
+
+	/**
+	 * Create a bottom-level acceleration structure (BLAS) from one or more triangle
+	 * geometries. Built refit-capable: after the contents of the vertex buffers change
+	 * (e.g. deformed by a compute shader via {@code BGFX_BUFFER_COMPUTE_WRITE}), call {@code updateBlas}.
+	 * <strong>Attention:</strong> Availability depends on: {@code BGFX_CAPS_RAY_TRACING}.
+	 * @param _vertexBuffers Vertex buffers with the geometry positions, one per geometry.
+	 * @param _indexBuffers Index buffers describing the triangles, one per geometry.
+	 * @param _num Number of geometries.
+	 * @return Acceleration structure handle.
+	 */
+	public static AccelerationStructureHandle createBlas(MemorySegment _vertexBuffers, MemorySegment _indexBuffers, @Unsigned short _num) {
+		try {
+			try (Arena arena = Arena.ofConfined()) {
+				return AccelerationStructureHandle.read((MemorySegment) MH_CREATE_BLAS.invokeExact((SegmentAllocator) arena, address(_vertexBuffers), address(_indexBuffers), _num));
+			}
+		} catch (Throwable ex) {
+			throw invocationFailure(ex);
+		}
+	}
+
+	/**
+	 * Refit a bottom-level acceleration structure after its source vertex buffers changed.
+	 * Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
+	 * referencing this BLAS should be updated afterwards (see {@code updateTlas}).
+	 * <strong>Attention:</strong> Availability depends on: {@code BGFX_CAPS_RAY_TRACING}.
+	 * @param _handle Bottom-level acceleration structure handle.
+	 */
+	public static void updateBlas(AccelerationStructureHandle _handle) {
+		try {
+			try (Arena arena = Arena.ofConfined()) {
+				MH_UPDATE_BLAS.invokeExact(_handle.allocate(arena));
+			}
+		} catch (Throwable ex) {
+			throw invocationFailure(ex);
+		}
+	}
+
+	/**
+	 * Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
+	 * acceleration structures. All instances start with the identity transform; use
+	 * {@code updateTlas} to set per-instance transforms.
+	 * <strong>Attention:</strong> Availability depends on: {@code BGFX_CAPS_RAY_TRACING}.
+	 * @param _blases Bottom-level acceleration structures, one per instance.
+	 * @param _num Number of instances.
+	 * @return Acceleration structure handle.
+	 */
+	public static AccelerationStructureHandle createTlas(MemorySegment _blases, @Unsigned short _num) {
+		try {
+			try (Arena arena = Arena.ofConfined()) {
+				return AccelerationStructureHandle.read((MemorySegment) MH_CREATE_TLAS.invokeExact((SegmentAllocator) arena, address(_blases), _num));
+			}
+		} catch (Throwable ex) {
+			throw invocationFailure(ex);
+		}
+	}
+
+	/**
+	 * Update the per-instance transforms of a top-level acceleration structure and rebuild
+	 * it in place.
+	 * <strong>Attention:</strong> Availability depends on: {@code BGFX_CAPS_RAY_TRACING}.
+	 * @param _handle Top-level acceleration structure handle.
+	 * @param _mem One 4x4 matrix per instance (as produced by {@code bx.mtx*}), in {@code createTlas} order.
+	 */
+	public static void updateTlas(AccelerationStructureHandle _handle, Memory _mem) {
+		try {
+			try (Arena arena = Arena.ofConfined()) {
+				MH_UPDATE_TLAS.invokeExact(_handle.allocate(arena), address(_mem));
+			}
+		} catch (Throwable ex) {
+			throw invocationFailure(ex);
+		}
+	}
+
+	/**
+	 * Create a ray-tracing pipeline program from a ray-generation, a miss, and a (triangle)
+	 * closest-hit shader. Dispatch with {@code dispatch}; for a ray-tracing program the dispatch
+	 * dimensions are the ray-grid size in RAYS (not workgroups).
+	 * <strong>Attention:</strong> Availability depends on: {@code BGFX_CAPS_RAY_TRACING_PIPELINE}.
+	 * @param _rayGen Ray-generation shader.
+	 * @param _miss Miss shader.
+	 * @param _closestHit Closest-hit shader (triangle hit group).
+	 * @param _destroyShaders If true, shaders will be destroyed when program is destroyed.
+	 * @return Program handle.
+	 */
+	public static ProgramHandle createRtProgram(ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit, boolean _destroyShaders) {
+		try {
+			try (Arena arena = Arena.ofConfined()) {
+				return ProgramHandle.read((MemorySegment) MH_CREATE_RT_PROGRAM.invokeExact((SegmentAllocator) arena, _rayGen.allocate(arena), _miss.allocate(arena), _closestHit.allocate(arena), _destroyShaders));
+			}
+		} catch (Throwable ex) {
+			throw invocationFailure(ex);
+		}
+	}
+
+	/**
+	 * Destroy acceleration structure.
+	 * @param _handle Acceleration structure handle.
+	 */
+	public static void destroyAccelerationStructure(AccelerationStructureHandle _handle) {
+		try {
+			try (Arena arena = Arena.ofConfined()) {
+				MH_DESTROY_ACCELERATION_STRUCTURE.invokeExact(_handle.allocate(arena));
 			}
 		} catch (Throwable ex) {
 			throw invocationFailure(ex);
@@ -3248,6 +3372,21 @@ public final class Bgfx {
 	}
 
 	/**
+	 * Set acceleration structure for compute (ray query).
+	 * @param _stage Compute stage.
+	 * @param _handle Acceleration structure handle.
+	 */
+	public static void setAccelerationStructure(@Unsigned byte _stage, AccelerationStructureHandle _handle) {
+		try {
+			try (Arena arena = Arena.ofConfined()) {
+				MH_SET_ACCELERATION_STRUCTURE.invokeExact(_stage, _handle.allocate(arena));
+			}
+		} catch (Throwable ex) {
+			throw invocationFailure(ex);
+		}
+	}
+
+	/**
 	 * Dispatch compute.
 	 * @param _id View id.
 	 * @param _program Compute program.
@@ -4965,6 +5104,11 @@ public final class Bgfx {
 		 * Ray tracing is supported.
 		 */
 		public static final long RayTracing = 0x0000000001000000L;
+
+		/**
+		 * Ray tracing pipelines (raygen/miss/hit shaders) are supported.
+		 */
+		public static final long RayTracingPipeline = 0x0000000002000000L;
 	}
 
 	/**
@@ -13019,6 +13163,21 @@ public final class Bgfx {
 		}
 
 		/**
+		 * Set acceleration structure for compute (ray query).
+		 * @param _stage Compute stage.
+		 * @param _handle Acceleration structure handle.
+		 */
+		public final void setAccelerationStructure(@Unsigned byte _stage, AccelerationStructureHandle _handle) {
+			try {
+				try (Arena arena = Arena.ofConfined()) {
+					MH_ENCODER_SET_ACCELERATION_STRUCTURE.invokeExact(segment(), _stage, _handle.allocate(arena));
+				}
+			} catch (Throwable ex) {
+				throw invocationFailure(ex);
+			}
+		}
+
+		/**
 		 * Dispatch compute.
 		 * @param _id View id.
 		 * @param _program Compute program.
@@ -13172,6 +13331,71 @@ public final class Bgfx {
 			} catch (Throwable ex) {
 				throw invocationFailure(ex);
 			}
+		}
+	}
+
+	/**
+	 * Native bgfx handle.
+	 * @param idx native handle index
+	 */
+	@NullMarked
+	public record AccelerationStructureHandle(short idx) implements AutoCloseable {
+		/**
+		 * Native by-value handle layout.
+		 */
+		public static final StructLayout LAYOUT = cStruct("bgfx_acceleration_structure_handle_t",
+			ValueLayout.JAVA_SHORT.withName("idx"));
+		private static final VarHandle VH_IDX = LAYOUT.varHandle(
+			MemoryLayout.PathElement.groupElement("idx"));
+		/**
+		 * Invalid handle sentinel.
+		 */
+		public static final AccelerationStructureHandle INVALID = new AccelerationStructureHandle((short) 0xffff);
+
+		/**
+		 * Returns whether this handle is valid.
+		 * @return {@code true} when the handle index is not {@code UINT16_MAX}
+		 */
+		public boolean isValid() {
+			return idx != (short) 0xffff;
+		}
+
+		/**
+		 * Allocates and writes the native by-value handle representation.
+		 * @param allocator the destination allocator
+		 * @return the allocated native segment
+		 */
+		public MemorySegment allocate(SegmentAllocator allocator) {
+			MemorySegment segment = allocator.allocate(LAYOUT);
+			write(segment);
+			return segment;
+		}
+
+		/**
+		 * Writes this handle to an existing native segment.
+		 * @param segment the destination segment
+		 */
+		public void write(MemorySegment segment) {
+			segment = view(segment, LAYOUT);
+			VH_IDX.set(segment, 0L, idx);
+		}
+
+		/**
+		 * Reads a by-value handle from native memory.
+		 * @param segment the source segment
+		 * @return the decoded handle
+		 */
+		public static AccelerationStructureHandle read(MemorySegment segment) {
+			segment = view(segment, LAYOUT);
+			return new AccelerationStructureHandle((short) VH_IDX.get(segment, 0L));
+		}
+
+		/**
+		 * Destroys this native handle.
+		 */
+		@Override
+		public void close() {
+			Bgfx.destroyAccelerationStructure(this);
 		}
 	}
 

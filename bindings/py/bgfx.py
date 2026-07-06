@@ -589,6 +589,7 @@ class CapsFlags(enum.IntFlag):
 	VideoDecode = 0x400000
 	ViewportLayerArray = 0x800000
 	RayTracing = 0x1000000
+	RayTracingPipeline = 0x2000000
 
 class CapsFormatFlags(enum.IntFlag):
 	TextureNone = 0x0
@@ -743,6 +744,13 @@ class VertexLayout(ctypes.Structure):
 
 class Encoder(ctypes.Structure):
 	pass
+
+class AccelerationStructureHandle(ctypes.Structure):
+	_fields_ = [("idx", ctypes.c_uint16)]
+
+	@property
+	def valid(self):
+		return self.idx != 0xffff
 
 class DynamicIndexBufferHandle(ctypes.Structure):
 	_fields_ = [("idx", ctypes.c_uint16)]
@@ -1282,6 +1290,30 @@ def _bind(lib):
 	bgfx_destroy_vertex_layout = lib.bgfx_destroy_vertex_layout
 	bgfx_destroy_vertex_layout.argtypes = [VertexLayoutHandle]
 	bgfx_destroy_vertex_layout.restype = None
+	global bgfx_create_blas
+	bgfx_create_blas = lib.bgfx_create_blas
+	bgfx_create_blas.argtypes = [ctypes.POINTER(VertexBufferHandle), ctypes.POINTER(IndexBufferHandle), ctypes.c_uint16]
+	bgfx_create_blas.restype = AccelerationStructureHandle
+	global bgfx_update_blas
+	bgfx_update_blas = lib.bgfx_update_blas
+	bgfx_update_blas.argtypes = [AccelerationStructureHandle]
+	bgfx_update_blas.restype = None
+	global bgfx_create_tlas
+	bgfx_create_tlas = lib.bgfx_create_tlas
+	bgfx_create_tlas.argtypes = [ctypes.POINTER(AccelerationStructureHandle), ctypes.c_uint16]
+	bgfx_create_tlas.restype = AccelerationStructureHandle
+	global bgfx_update_tlas
+	bgfx_update_tlas = lib.bgfx_update_tlas
+	bgfx_update_tlas.argtypes = [AccelerationStructureHandle, ctypes.POINTER(Memory)]
+	bgfx_update_tlas.restype = None
+	global bgfx_create_rt_program
+	bgfx_create_rt_program = lib.bgfx_create_rt_program
+	bgfx_create_rt_program.argtypes = [ShaderHandle, ShaderHandle, ShaderHandle, ctypes.c_bool]
+	bgfx_create_rt_program.restype = ProgramHandle
+	global bgfx_destroy_acceleration_structure
+	bgfx_destroy_acceleration_structure = lib.bgfx_destroy_acceleration_structure
+	bgfx_destroy_acceleration_structure.argtypes = [AccelerationStructureHandle]
+	bgfx_destroy_acceleration_structure.restype = None
 	global bgfx_create_vertex_buffer
 	bgfx_create_vertex_buffer = lib.bgfx_create_vertex_buffer
 	bgfx_create_vertex_buffer.argtypes = [ctypes.POINTER(Memory), ctypes.POINTER(VertexLayout), ctypes.c_uint16]
@@ -1774,6 +1806,10 @@ def _bind(lib):
 	bgfx_encoder_set_image_view = lib.bgfx_encoder_set_image_view
 	bgfx_encoder_set_image_view.argtypes = [ctypes.POINTER(Encoder), ctypes.c_uint8, TextureHandle, ctypes.c_uint16, ctypes.c_uint16, ctypes.c_uint8, ctypes.c_int, ctypes.c_int]
 	bgfx_encoder_set_image_view.restype = None
+	global bgfx_encoder_set_acceleration_structure
+	bgfx_encoder_set_acceleration_structure = lib.bgfx_encoder_set_acceleration_structure
+	bgfx_encoder_set_acceleration_structure.argtypes = [ctypes.POINTER(Encoder), ctypes.c_uint8, AccelerationStructureHandle]
+	bgfx_encoder_set_acceleration_structure.restype = None
 	global bgfx_encoder_dispatch
 	bgfx_encoder_dispatch = lib.bgfx_encoder_dispatch
 	bgfx_encoder_dispatch.argtypes = [ctypes.POINTER(Encoder), ctypes.c_uint16, ProgramHandle, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint8]
@@ -1982,6 +2018,10 @@ def _bind(lib):
 	bgfx_set_image_view = lib.bgfx_set_image_view
 	bgfx_set_image_view.argtypes = [ctypes.c_uint8, TextureHandle, ctypes.c_uint16, ctypes.c_uint16, ctypes.c_uint8, ctypes.c_int, ctypes.c_int]
 	bgfx_set_image_view.restype = None
+	global bgfx_set_acceleration_structure
+	bgfx_set_acceleration_structure = lib.bgfx_set_acceleration_structure
+	bgfx_set_acceleration_structure.argtypes = [ctypes.c_uint8, AccelerationStructureHandle]
+	bgfx_set_acceleration_structure.restype = None
 	global bgfx_dispatch
 	bgfx_dispatch = lib.bgfx_dispatch
 	bgfx_dispatch.argtypes = [ctypes.c_uint16, ProgramHandle, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint8]
