@@ -166,7 +166,9 @@ public void streamReservoir(inout Reservoir r, inout float wSum, Reservoir other
 // Primary-hit info for the G-buffer / demodulation (denoiser stage).
 public struct Primary
 {
-	public float3 albedo; // 1 for miss/emissive (modulation becomes identity)
+	public float3 albedo;   // 1 for miss/emissive (modulation becomes identity)
+	public float3 emission; // non-zero for emissive/background primaries: displayed directly,
+	                        // NOT run through accumulation/filtering (see the atrous resolve)
 	public float3 normal;
 	public float  t;
 	public int    inst;   // 0 static, 1 tall box, 2 short box (for temporal reprojection)
