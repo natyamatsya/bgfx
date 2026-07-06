@@ -13,6 +13,7 @@
 // The two boxes rotate about their own axes (u_params.z) when the rotation mode is on.
 import bgfx_shader;
 import bgfx_compute;
+import "cornellbox.sh";
 
 RWTexture2D<float4> s_accum  : register(u0); // stage 0: rgb = radiance sum, a = sample count
 RWTexture2D<float4> s_target : register(u1); // stage 1: tonemapped display image
@@ -29,8 +30,6 @@ uniform float4 u_ptParams;
 
 static const float kInf = 1e30;
 static const float kEps = 1e-3;
-static const float kPi  = 3.14159265;
-static const int   kBounces = 4;
 
 struct Hit
 {
@@ -38,38 +37,8 @@ struct Hit
 	float3 n;
 	float3 albedo;
 	float3 emission;
+	int    inst; // 0 static, 1 tall box, 2 short box (for temporal reprojection)
 };
-
-// --- RNG (PCG) --------------------------------------------------------------------------
-
-uint pcgHash(uint v)
-{
-	v = v*747796405u + 2891336453u;
-	uint w = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
-	return (w >> 22u) ^ w;
-}
-
-float rnd(inout uint state)
-{
-	state = pcgHash(state);
-	return float(state) * (1.0 / 4294967296.0);
-}
-
-// Rotation about Y matching bx::mtxRotateY's (row-vector) convention.
-float3 rotY(float3 v, float a)
-{
-	float c = cos(a), s = sin(a);
-	return float3(c*v.x - s*v.z, v.y, s*v.x + c*v.z);
-}
-
-float3 cosineSample(float3 n, float u1, float u2)
-{
-	float ang = 2.0*kPi*u1;
-	float r = sqrt(u2);
-	float3 t = normalize(cross(abs(n.y) < 0.99 ? float3(0,1,0) : float3(1,0,0), n) );
-	float3 b = cross(n, t);
-	return normalize(t*(r*cos(ang)) + b*(r*sin(ang)) + n*sqrt(max(0.0, 1.0 - u2)) );
-}
 
 // --- analytic scene ---------------------------------------------------------------------
 
@@ -89,7 +58,7 @@ void hitQuad(float3 ro, float3 rd, int axis, float value, float3 lo, float3 hi, 
 	else if (axis == 1) inBounds = p.x >= lo.x && p.x <= hi.x && p.z >= lo.z && p.z <= hi.z;
 	else                inBounds = p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y;
 	if (!inBounds) return;
-	best.t = t; best.n = n; best.albedo = albedo; best.emission = emission;
+	best.t = t; best.n = n; best.albedo = albedo; best.emission = emission; best.inst = 0;
 }
 
 // Ray vs axis-aligned box [lo,hi] in LOCAL space; returns t and local-space normal.
@@ -116,39 +85,31 @@ bool hitBoxLocal(float3 ro, float3 rd, float3 lo, float3 hi, float tMax, out flo
 
 // Ray vs a box rotated by `angle` about Y around centre c (matches the RT path's TLAS
 // instance transforms): trace in the box's local frame, rotate the normal back out.
-void hitOBB(float3 ro, float3 rd, float3 c, float3 lo, float3 hi, float angle, float3 albedo, inout Hit best)
+void hitOBB(float3 ro, float3 rd, float3 c, float3 lo, float3 hi, float angle, float3 albedo, int inst, inout Hit best)
 {
 	float3 roL = rotY(ro - c, -angle);
 	float3 rdL = rotY(rd, -angle);
 	float t; float3 nL;
 	if (hitBoxLocal(roL, rdL, lo, hi, best.t, t, nL) )
 	{
-		best.t = t; best.n = rotY(nL, angle); best.albedo = albedo; best.emission = float3(0, 0, 0);
+		best.t = t; best.n = rotY(nL, angle); best.albedo = albedo; best.emission = float3(0, 0, 0); best.inst = inst;
 	}
 }
 
 static const float3 kWhite = float3(0.73, 0.73, 0.73);
 static const float3 kRed   = float3(0.65, 0.05, 0.05);
 static const float3 kGreen = float3(0.12, 0.45, 0.15);
-static const float3 kLightEmission = float3(18.0, 18.0, 18.0);
 
-// Light rectangle on the ceiling.
-static const float3 kLightLo = float3(-0.35, 0.997, -0.35);
-static const float3 kLightHi = float3( 0.35, 0.997,  0.35);
-static const float3 kLightCenter = float3(0.0, 0.997, 0.0);
-static const float  kLightArea = 0.7 * 0.7;
-
-// The two boxes, authored in local space centred (in xz) on their world positions.
+// The two boxes, authored in local space centred (in xz) on their world positions
+// (centres kTallC / kShortC come from cornellbox_common).
 static const float3 kTallLo = float3(-0.25, -1.0, -0.25);
 static const float3 kTallHi = float3( 0.25,  0.3,  0.25);
-static const float3 kTallC  = float3(-0.37,  0.0,  0.15);
 static const float3 kShortLo = float3(-0.25, -1.0, -0.25);
 static const float3 kShortHi = float3( 0.25, -0.4,  0.25);
-static const float3 kShortC  = float3( 0.35,  0.0, -0.30);
 
 Hit sceneHit(float3 ro, float3 rd)
 {
-	Hit best; best.t = kInf; best.n = float3(0,0,0); best.albedo = float3(0,0,0); best.emission = float3(0,0,0);
+	Hit best; best.t = kInf; best.n = float3(0,0,0); best.albedo = float3(0,0,0); best.emission = float3(0,0,0); best.inst = 0;
 
 	// Walls (interior of a [-1,1]^3 box, open front at z=-1).
 	hitQuad(ro, rd, 1, -1.0, float3(-1,-1,-1), float3(1,-1,1), float3(0, 1, 0), kWhite, float3(0,0,0), best); // floor
@@ -161,13 +122,11 @@ Hit sceneHit(float3 ro, float3 rd)
 	hitQuad(ro, rd, 1, 0.998, kLightLo, kLightHi, float3(0,-1,0), float3(0,0,0), kLightEmission, best);
 
 	// Two boxes, rotating about their own axes in rotation mode.
-	hitOBB(ro, rd, kTallC,  kTallLo,  kTallHi,   u_params.z, kWhite, best); // tall
-	hitOBB(ro, rd, kShortC, kShortLo, kShortHi, -u_params.z, kWhite, best); // short
+	hitOBB(ro, rd, kTallC,  kTallLo,  kTallHi,   u_params.z, kWhite, 1, best); // tall
+	hitOBB(ro, rd, kShortC, kShortLo, kShortHi, -u_params.z, kWhite, 2, best); // short
 
 	return best;
 }
-
-static const float kShadowBias = 4e-3;
 
 bool occluded(float3 ro, float3 rd, float maxT)
 {
@@ -176,14 +135,6 @@ bool occluded(float3 ro, float3 rd, float maxT)
 	Hit h = sceneHit(ro, rd);
 	return h.t < maxT - kShadowBias && dot(h.emission, h.emission) <= 0.0;
 }
-
-// Primary-hit info for the G-buffer / demodulation (mode 2).
-struct Primary
-{
-	float3 albedo; // 1 for miss/emissive (modulation becomes identity)
-	float3 normal;
-	float  t;
-};
 
 // --- stage 0: simple RT (deterministic direct lighting) ---------------------------------
 
@@ -217,6 +168,7 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim)
 	prim.albedo = float3(1, 1, 1);
 	prim.normal = float3(0, 0, 0);
 	prim.t      = 0.0;
+	prim.inst   = 0;
 
 	const int maxBounces = clamp(int(u_ptParams.y), 1, 8);
 	for (int bounce = 0; bounce < maxBounces; ++bounce)
@@ -242,14 +194,11 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim)
 			prim.albedo = h.albedo;
 			prim.normal = h.n;
 			prim.t      = h.t;
+			prim.inst   = h.inst;
 		}
 
 		// Next-event estimation: sample a point on the area light.
-		float3 lp = float3(
-			  lerp(kLightLo.x, kLightHi.x, rnd(rng))
-			, kLightLo.y
-			, lerp(kLightLo.z, kLightHi.z, rnd(rng))
-			);
+		float3 lp = sampleLightPoint(rng);
 		float3 toL = lp - p;
 		float d2 = dot(toL, toL);
 		float dist = sqrt(d2);
@@ -270,12 +219,6 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim)
 	return radiance;
 }
 
-float3 tonemap(float3 color)
-{
-	color = color / (color + 1.0);
-	return pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2) );
-}
-
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void computeMain(uint3 dtid : SV_DispatchThreadID)
@@ -288,17 +231,11 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 
 	uint rng = pcgHash(dtid.y*9781u + dtid.x + pcgHash(uint(u_params.x)*2971u) );
 
-	float aspect = res.x / res.y;
-	float3 eye = float3(0.0, 0.0, -3.8);
-	float tanHalfFov = tan(radians(40.0) * 0.5);
-
 	if (mode == 0)
 	{
 		// Simple RT: deterministic, no accumulation.
-		float2 uv0 = (float2(dtid.xy) + 0.5) / res * 2.0 - 1.0;
-		uv0.y = -uv0.y;
-		float3 rd0 = normalize(float3(uv0.x * tanHalfFov * aspect, uv0.y * tanHalfFov, 1.0) );
-		imageStore(s_target, ivec2(dtid.xy), float4(tonemap(directLight(eye, rd0) ), 1.0) );
+		float3 rd0 = primaryRay(float2(dtid.xy), float2(0.5, 0.5), res);
+		imageStore(s_target, ivec2(dtid.xy), float4(tonemap(directLight(kEye, rd0) ), 1.0) );
 		return;
 	}
 
@@ -309,31 +246,28 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 	for (int s = 0; s < spp; ++s)
 	{
 		float2 jitter = float2(rnd(rng), rnd(rng) );
-		float2 uv = (float2(dtid.xy) + jitter) / res * 2.0 - 1.0;
-		uv.y = -uv.y;
-		float3 rd = normalize(float3(uv.x * tanHalfFov * aspect, uv.y * tanHalfFov, 1.0) );
+		float3 rd = primaryRay(float2(dtid.xy), jitter, res);
 		Primary p;
-		sampleSum += pathTrace(eye, rd, rng, p);
+		sampleSum += pathTrace(kEye, rd, rng, p);
 		if (s == 0) prim = p;
 	}
 
-	// Progressive accumulation (reset when the scene changed).
-	float4 prev  = s_accum[int2(dtid.xy)];
-	float3 sum   = u_params.y > 0.5 ? sampleSum : prev.rgb + sampleSum;
-	float  count = u_params.y > 0.5 ? float(spp) : prev.a + float(spp);
-	s_accum[int2(dtid.xy)] = float4(sum, count);
-
-	float3 avg = sum / count;
-
 	if (mode == 1)
 	{
-		imageStore(s_target, ivec2(dtid.xy), float4(tonemap(avg), 1.0) );
+		// Progressive accumulation (reset when the scene changed).
+		float4 prev  = s_accum[int2(dtid.xy)];
+		float3 sum   = u_params.y > 0.5 ? sampleSum : prev.rgb + sampleSum;
+		float  count = u_params.y > 0.5 ? float(spp) : prev.a + float(spp);
+		s_accum[int2(dtid.xy)] = float4(sum, count);
+		imageStore(s_target, ivec2(dtid.xy), float4(tonemap(sum / count), 1.0) );
 		return;
 	}
 
-	// Mode 2: write the G-buffer and the albedo-demodulated irradiance; the a-trous passes
-	// filter it and produce the display image.
+	// Mode 2: write the G-buffer and THIS FRAME's albedo-demodulated irradiance (plus the
+	// instance id for reprojection); the temporal pass owns the accumulation, the a-trous
+	// passes filter it, and the final pass produces the display image.
+	float3 fresh = (sampleSum / float(spp)) / max(prim.albedo, float3(1e-3, 1e-3, 1e-3) );
 	s_gbufA[int2(dtid.xy)] = float4(prim.albedo, 1.0);
 	s_gbufN[int2(dtid.xy)] = float4(prim.normal, prim.t);
-	s_irr[int2(dtid.xy)]   = float4(avg / max(prim.albedo, float3(1e-3, 1e-3, 1e-3) ), 1.0);
+	s_irr[int2(dtid.xy)]   = float4(fresh, float(prim.inst) );
 }
