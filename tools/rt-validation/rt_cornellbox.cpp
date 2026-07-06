@@ -151,7 +151,7 @@ int main(int argc,char**argv){
 		Mesh&M=*meshes[i];
 		bgfx::VertexBufferHandle vb=bgfx::createVertexBuffer(bgfx::copy(M.pos.data(),uint32_t(M.pos.size()*4)),pl);
 		bgfx::IndexBufferHandle ib=bgfx::createIndexBuffer(bgfx::copy(M.idx.data(),uint32_t(M.idx.size()*2)));
-		blas[i]=bgfx::createBlas(vb,ib);
+		blas[i]=bgfx::createBlas(&vb,&ib,1);
 		mats.insert(mats.end(),M.mat.begin(),M.mat.end());
 	}
 	printf("materials: %zu (expect 36)\n", mats.size());

@@ -505,6 +505,7 @@
 #define BGFX_CAPS_VIDEO_DECODE                    UINT64_C(0x0000000000400000) //!< Hardware video decode is supported.
 #define BGFX_CAPS_VIEWPORT_LAYER_ARRAY            UINT64_C(0x0000000000800000) //!< Viewport layer is available in vertex shader.
 #define BGFX_CAPS_RAY_TRACING                     UINT64_C(0x0000000001000000) //!< Ray tracing is supported.
+#define BGFX_CAPS_RAY_TRACING_PIPELINE            UINT64_C(0x0000000002000000) //!< Ray tracing pipelines (raygen/miss/hit shaders) are supported.
 
 #define BGFX_CAPS_FORMAT_TEXTURE_NONE             UINT32_C(0x00000000) //!< Texture format is not supported.
 #define BGFX_CAPS_FORMAT_TEXTURE_2D               UINT32_C(0x00000001) //!< Texture format is supported.

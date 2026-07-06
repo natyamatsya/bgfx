@@ -149,9 +149,19 @@ back to the analytic compute shader otherwise.
 - Vulkan path validated via lavapipe (`tools/rt-validation/`, cross-backend image
   agreement with Metal at mean |delta| 0.12/255); a run on real `VK_KHR_ray_query`
   hardware remains a nice-to-have for performance and driver-diversity coverage.
-- Path-traced global illumination in the example (colour bleeding).
-- Generalize `createBlas`/`createTlas` (multiple geometries, instance transforms, update/refit).
-- The RT *pipeline* stages (SBT, raygen/hit/miss dispatch) — the larger later workstream.
+- Path-traced global illumination in the example (colour bleeding) -- done, along with
+  SVGF denoising and ReSTIR DI (see `examples/52-cornellbox`).
+- Generalized API -- done: `createTlas` takes multiple BLAS instances with per-instance
+  transforms (`updateTlas`); `createBlas` takes multiple geometries and supports in-place
+  refit (`updateBlas`) after e.g. compute-shader deformation of the source vertex buffers.
+  All validated on Metal (on-device) and Vulkan (lavapipe), `tools/rt-validation/`.
+- The RT *pipeline* v1 is DONE (Vulkan-only, lavapipe-verified): `createRtProgram(raygen,
+  miss, closestHit)` + `bgfx::dispatch` (ray-grid in rays) with the SBT built at pipeline
+  creation; new `BGFX_CAPS_RAY_TRACING_PIPELINE` cap. Current limits: fixed 3-stage shape
+  (one triangle hit group), recursion depth 1, all resources declared in the raygen stage.
+  Next steps there: multiple miss/hit groups, callables, deeper recursion — and a Metal
+  path, which cannot come from SPIRV-Cross (no MSL for RT pipeline stages) and would
+  instead map onto Metal intersection function tables.
 
 ## 10. Risks
 
