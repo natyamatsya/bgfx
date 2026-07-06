@@ -84,30 +84,28 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 		// instances: rotate back by the per-frame delta about the box's own centre
 		// (tall = +delta, short = -delta -- matching the app's transforms).
 		float2 res2 = float2(res);
-		float aspect = res2.x / res2.y;
 		float3 rd = primaryRay(float2(px), float2(0.5, 0.5), res2);
 		float3 p = kEye + t*rd;
 
-		float3 pPrev = p;
 		float3 nPrev = n;
-		if (inst == 1) { pPrev = rotY(p - kTallC,  -u_tparams.x) + kTallC;  nPrev = rotY(n, -u_tparams.x); }
-		if (inst == 2) { pPrev = rotY(p - kShortC,  u_tparams.x) + kShortC; nPrev = rotY(n,  u_tparams.x); }
+		if (inst == 1) nPrev = rotY(n, -u_tparams.x);
+		if (inst == 2) nPrev = rotY(n,  u_tparams.x);
 
-		// Project the previous-frame position with the (static) camera.
-		float3 v = pPrev - kEye;
-		if (v.z > 1e-3)
+		const float2 prevPfShared = reprojectPixel(p, inst, u_tparams.x, res2);
+		if (prevPfShared.x > -1e5)
 		{
-			float2 ndc = float2(v.x / (v.z * kTanHalfFov * aspect), v.y / (v.z * kTanHalfFov) );
-			ndc.y = -ndc.y;
 			// Bilinear history resample with PER-TAP validation: each of the four
 			// surrounding texels must have seen (nearly) the same surface -- normal (in
 			// previous-frame orientation) and view depth agree -- and only the valid taps
 			// contribute with their bilinear weights. This removes the shimmer of
 			// nearest-pixel resampling without ever blending across a disocclusion.
-			const float2 prevPf = (ndc * 0.5 + 0.5) * res2 - 0.5;
-			const float2 base = floor(prevPf);
-			const float2 fr = prevPf - base;
-			const float tPrev = length(v);
+			const float2 base = floor(prevPfShared);
+			const float2 fr = prevPfShared - base;
+			// View depth of the reprojected point (the camera is at kEye).
+			float3 pPrev = p;
+			if (inst == 1) pPrev = rotY(p - kTallC,  -u_tparams.x) + kTallC;
+			if (inst == 2) pPrev = rotY(p - kShortC,  u_tparams.x) + kShortC;
+			const float tPrev = length(pPrev - kEye);
 
 			const float wBil[4] = { (1.0-fr.x)*(1.0-fr.y), fr.x*(1.0-fr.y), (1.0-fr.x)*fr.y, fr.x*fr.y };
 			const int2  oBil[4] = { int2(0,0), int2(1,0), int2(0,1), int2(1,1) };
