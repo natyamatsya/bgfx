@@ -466,10 +466,23 @@ namespace bgfx
 		return uint32_t(_type) == (_magic & BX_MAKEFOURCC(0xff, 0, 0, 0) );
 	}
 
+	// Ray tracing pipeline stages: raygeneration, intersection, anyhit, closesthit, miss,
+	// callable (see BGFX_CHUNK_MAGIC_?SH in shaderc).
+	static constexpr bool isRayTracingShaderType(uint32_t _magic)
+	{
+		return isShaderType(_magic, 'R')
+			|| isShaderType(_magic, 'I')
+			|| isShaderType(_magic, 'A')
+			|| isShaderType(_magic, 'H')
+			|| isShaderType(_magic, 'M')
+			|| isShaderType(_magic, 'L')
+			;
+	}
+
 	inline bool isShaderBin(uint32_t _magic)
 	{
 		return BX_MAKEFOURCC(0, 'S', 'H', 0) == (_magic & BX_MAKEFOURCC(0, 0xff, 0xff, 0) )
-			&& (isShaderType(_magic, 'C') || isShaderType(_magic, 'F') || isShaderType(_magic, 'V') )
+			&& (isShaderType(_magic, 'C') || isShaderType(_magic, 'F') || isShaderType(_magic, 'V') || isRayTracingShaderType(_magic) )
 			;
 	}
 
@@ -1080,6 +1093,7 @@ namespace bgfx
 			CreateIndexBuffer,
 			CreateVertexBuffer,
 			CreateBlas,
+			UpdateBlas,
 			CreateTlas,
 			UpdateTlas,
 			CreateDynamicIndexBuffer,
@@ -1088,6 +1102,7 @@ namespace bgfx
 			UpdateDynamicVertexBuffer,
 			CreateShader,
 			CreateProgram,
+			CreateRtProgram,
 			CreateTexture,
 			UpdateTexture,
 			ClearTexture,
@@ -2611,6 +2626,7 @@ namespace bgfx
 	{
 		ShaderHandle m_vsh;
 		ShaderHandle m_fsh;
+		ShaderHandle m_xsh; // ray-tracing programs only: closest hit (m_vsh = raygen, m_fsh = miss)
 		int16_t      m_refCount;
 	};
 
@@ -4573,7 +4589,9 @@ namespace bgfx
 		virtual void destroyVertexLayout(VertexLayoutHandle _handle) = 0;
 		virtual void createVertexBuffer(VertexBufferHandle _handle, const Memory* _mem, VertexLayoutHandle _layoutHandle, uint16_t _flags) = 0;
 		virtual void destroyVertexBuffer(VertexBufferHandle _handle) = 0;
-		virtual void createBlas(AccelerationStructureHandle _handle, VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) = 0;
+		virtual void createBlas(AccelerationStructureHandle _handle, const VertexBufferHandle* _vertexBuffers, const IndexBufferHandle* _indexBuffers, uint16_t _num) = 0;
+		virtual void updateBlas(AccelerationStructureHandle _handle) = 0;
+		virtual void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit) = 0;
 		virtual void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) = 0;
 		virtual void updateTlas(AccelerationStructureHandle _handle, const Memory* _mem) = 0;
 		virtual void destroyAccelerationStructure(AccelerationStructureHandle _handle) = 0;
@@ -5040,7 +5058,7 @@ namespace bgfx
 			m_vertexBufferHandle.free(_handle.idx);
 		}
 
-		BGFX_API_FUNC(AccelerationStructureHandle createBlas(VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) )
+		BGFX_API_FUNC(AccelerationStructureHandle createBlas(const VertexBufferHandle* _vertexBuffers, const IndexBufferHandle* _indexBuffers, uint16_t _num) )
 		{
 			BGFX_MUTEX_SCOPE(m_resourceApiLock);
 
@@ -5051,11 +5069,25 @@ namespace bgfx
 			{
 				CommandBuffer& cmdbuf = getCommandBuffer(CommandBuffer::CreateBlas);
 				cmdbuf.write(handle);
-				cmdbuf.write(_vertexBuffer);
-				cmdbuf.write(_indexBuffer);
+				cmdbuf.write(_num);
+				for (uint16_t ii = 0; ii < _num; ++ii)
+				{
+					cmdbuf.write(_vertexBuffers[ii]);
+					cmdbuf.write(_indexBuffers[ii]);
+				}
 			}
 
 			return handle;
+		}
+
+		BGFX_API_FUNC(void updateBlas(AccelerationStructureHandle _handle) )
+		{
+			BGFX_MUTEX_SCOPE(m_resourceApiLock);
+
+			BGFX_CHECK_HANDLE("updateBlas", m_accelerationStructureHandle, _handle);
+
+			CommandBuffer& cmdbuf = getCommandBuffer(CommandBuffer::UpdateBlas);
+			cmdbuf.write(_handle);
 		}
 
 		BGFX_API_FUNC(AccelerationStructureHandle createTlas(const AccelerationStructureHandle* _blases, uint16_t _num) )
@@ -5724,6 +5756,14 @@ namespace bgfx
 				return BGFX_INVALID_HANDLE;
 			}
 
+			if (isRayTracingShaderType(magic)
+			&&  0 == (g_caps.supported & BGFX_CAPS_RAY_TRACING_PIPELINE) )
+			{
+				BX_TRACE("Creating ray-tracing shader but ray-tracing pipelines are not supported!");
+				release(_mem);
+				return BGFX_INVALID_HANDLE;
+			}
+
 			if (isShaderVerLess(magic, 12) )
 			{
 				BX_TRACE("Unsupported shader binary version %d, expected 12 or newer. Recompile shaders with the matching shaderc."
@@ -6099,6 +6139,7 @@ namespace bgfx
 					pr.m_vsh = _vsh;
 					ShaderHandle fsh = BGFX_INVALID_HANDLE;
 					pr.m_fsh = fsh;
+					pr.m_xsh = BGFX_INVALID_HANDLE;
 					pr.m_refCount = 1;
 
 					const uint32_t key = uint32_t(_vsh.idx);
@@ -6120,6 +6161,53 @@ namespace bgfx
 			return handle;
 		}
 
+		BGFX_API_FUNC(ProgramHandle createRtProgram(ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit, bool _destroyShaders) )
+		{
+			BGFX_MUTEX_SCOPE(m_resourceApiLock);
+
+			if (!isValid(_rayGen) || !isValid(_miss) || !isValid(_closestHit) )
+			{
+				BX_WARN(false, "Invalid ray-tracing program shaders (raygen %d, miss %d, closesthit %d)."
+					, _rayGen.idx
+					, _miss.idx
+					, _closestHit.idx
+					);
+				return BGFX_INVALID_HANDLE;
+			}
+
+			// No program dedup for ray-tracing programs (the shared hash-map key only fits
+			// two shader indices); each create allocates a fresh handle.
+			ProgramHandle handle = { m_programHandle.alloc() };
+			BX_WARN(isValid(handle), "Failed to allocate program handle.");
+
+			if (isValid(handle) )
+			{
+				shaderIncRef(_rayGen);
+				shaderIncRef(_miss);
+				shaderIncRef(_closestHit);
+				ProgramRef& pr = m_programRef[handle.idx];
+				pr.m_vsh = _rayGen;
+				pr.m_fsh = _miss;
+				pr.m_xsh = _closestHit;
+				pr.m_refCount = 1;
+
+				CommandBuffer& cmdbuf = getCommandBuffer(CommandBuffer::CreateRtProgram);
+				cmdbuf.write(handle);
+				cmdbuf.write(_rayGen);
+				cmdbuf.write(_miss);
+				cmdbuf.write(_closestHit);
+			}
+
+			if (_destroyShaders)
+			{
+				shaderTakeOwnership(_rayGen);
+				shaderTakeOwnership(_miss);
+				shaderTakeOwnership(_closestHit);
+			}
+
+			return handle;
+		}
+
 		BGFX_API_FUNC(void destroyProgram(ProgramHandle _handle) )
 		{
 			BGFX_MUTEX_SCOPE(m_resourceApiLock);
@@ -6132,6 +6220,11 @@ namespace bgfx
 			if (isValid(pr.m_fsh) )
 			{
 				shaderDecRef(pr.m_fsh);
+			}
+
+			if (isValid(pr.m_xsh) )
+			{
+				shaderDecRef(pr.m_xsh);
 			}
 
 			int32_t refs = --pr.m_refCount;

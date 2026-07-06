@@ -269,13 +269,17 @@ BGFX_C_API void bgfx_destroy_vertex_layout(bgfx_vertex_layout_handle_t _layoutHa
 	bgfx::destroy(layoutHandle.cpp);
 }
 
-BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_blas(bgfx_vertex_buffer_handle_t _vertexBuffer, bgfx_index_buffer_handle_t _indexBuffer)
+BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_blas(const bgfx_vertex_buffer_handle_t* _vertexBuffers, const bgfx_index_buffer_handle_t* _indexBuffers, uint16_t _num)
 {
-	union { bgfx_vertex_buffer_handle_t c; bgfx::VertexBufferHandle cpp; } vertexBuffer = { _vertexBuffer };
-	union { bgfx_index_buffer_handle_t c; bgfx::IndexBufferHandle cpp; } indexBuffer = { _indexBuffer };
 	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } handle_ret;
-	handle_ret.cpp = bgfx::createBlas(vertexBuffer.cpp, indexBuffer.cpp);
+	handle_ret.cpp = bgfx::createBlas((const bgfx::VertexBufferHandle*)_vertexBuffers, (const bgfx::IndexBufferHandle*)_indexBuffers, _num);
 	return handle_ret.c;
+}
+
+BGFX_C_API void bgfx_update_blas(bgfx_acceleration_structure_handle_t _handle)
+{
+	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } handle = { _handle };
+	bgfx::updateBlas(handle.cpp);
 }
 
 BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_tlas(const bgfx_acceleration_structure_handle_t* _blases, uint16_t _num)
@@ -289,6 +293,16 @@ BGFX_C_API void bgfx_update_tlas(bgfx_acceleration_structure_handle_t _handle, c
 {
 	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } handle = { _handle };
 	bgfx::updateTlas(handle.cpp, (const bgfx::Memory*)_mem);
+}
+
+BGFX_C_API bgfx_program_handle_t bgfx_create_rt_program(bgfx_shader_handle_t _rayGen, bgfx_shader_handle_t _miss, bgfx_shader_handle_t _closestHit, bool _destroyShaders)
+{
+	union { bgfx_shader_handle_t c; bgfx::ShaderHandle cpp; } rayGen = { _rayGen };
+	union { bgfx_shader_handle_t c; bgfx::ShaderHandle cpp; } miss = { _miss };
+	union { bgfx_shader_handle_t c; bgfx::ShaderHandle cpp; } closestHit = { _closestHit };
+	union { bgfx_program_handle_t c; bgfx::ProgramHandle cpp; } handle_ret;
+	handle_ret.cpp = bgfx::createRtProgram(rayGen.cpp, miss.cpp, closestHit.cpp, _destroyShaders);
+	return handle_ret.c;
 }
 
 BGFX_C_API void bgfx_destroy_acceleration_structure(bgfx_acceleration_structure_handle_t _handle)
@@ -1436,8 +1450,10 @@ BGFX_C_API bgfx_interface_vtbl_t* bgfx_get_interface(uint32_t _version)
 			bgfx_create_vertex_layout,
 			bgfx_destroy_vertex_layout,
 			bgfx_create_blas,
+			bgfx_update_blas,
 			bgfx_create_tlas,
 			bgfx_update_tlas,
+			bgfx_create_rt_program,
 			bgfx_destroy_acceleration_structure,
 			bgfx_create_vertex_buffer,
 			bgfx_set_vertex_buffer_name,

@@ -387,6 +387,7 @@ flag.Caps { bits = 64, base = 1, name = "Caps", section = "Available Caps" }
 	.VideoDecode            --- Hardware video decode is supported.
 	.ViewportLayerArray     --- Viewport layer is available in vertex shader.
 	.RayTracing             --- Ray tracing is supported.
+	.RayTracingPipeline     --- Ray tracing pipelines (raygen/miss/hit shaders) are supported.
 
 	.TextureCompareAll      --- All texture compare modes are supported.
 	 { "TextureCompareReserved", "TextureCompareLequal" }
@@ -1555,12 +1556,23 @@ func.destroy { cname = "destroy_vertex_layout", section = "Vertex Buffers" }
 	"void"
 	.layoutHandle "VertexLayoutHandle" --- Vertex layout handle.
 
---- Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+--- Create a bottom-level acceleration structure (BLAS) from one or more triangle
+--- geometries. Built refit-capable: after the contents of the vertex buffers change
+--- (e.g. deformed by a compute shader via `BGFX_BUFFER_COMPUTE_WRITE`), call `updateBlas`.
 --- @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
 func.createBlas { section = "Acceleration Structures" }
-	"AccelerationStructureHandle"       --- Acceleration structure handle.
-	.vertexBuffer "VertexBufferHandle"  --- Vertex buffer with the geometry positions.
-	.indexBuffer  "IndexBufferHandle"   --- Index buffer describing the triangles.
+	"AccelerationStructureHandle"                --- Acceleration structure handle.
+	.vertexBuffers "const VertexBufferHandle*"   --- Vertex buffers with the geometry positions, one per geometry.
+	.indexBuffers  "const IndexBufferHandle*"    --- Index buffers describing the triangles, one per geometry.
+	.num           "uint16_t"                    --- Number of geometries.
+
+--- Refit a bottom-level acceleration structure after its source vertex buffers changed.
+--- Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
+--- referencing this BLAS should be updated afterwards (see `updateTlas`).
+--- @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+func.updateBlas { section = "Acceleration Structures" }
+	"void"
+	.handle "AccelerationStructureHandle" --- Bottom-level acceleration structure handle.
 
 --- Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
 --- acceleration structures. All instances start with the identity transform; use
@@ -1578,6 +1590,18 @@ func.updateTlas { section = "Acceleration Structures" }
 	"void"
 	.handle "AccelerationStructureHandle" --- Top-level acceleration structure handle.
 	.mem    "const Memory*"               --- One 4x4 matrix per instance (as produced by `bx::mtx*`), in `createTlas` order.
+
+--- Create a ray-tracing pipeline program from a ray-generation, a miss, and a (triangle)
+--- closest-hit shader. Dispatch with `dispatch`; for a ray-tracing program the dispatch
+--- dimensions are the ray-grid size in RAYS (not workgroups).
+--- @attention Availability depends on: `BGFX_CAPS_RAY_TRACING_PIPELINE`.
+func.createRtProgram { section = "Acceleration Structures" }
+	"ProgramHandle"                --- Program handle.
+	.rayGen        "ShaderHandle"  --- Ray-generation shader.
+	.miss          "ShaderHandle"  --- Miss shader.
+	.closestHit    "ShaderHandle"  --- Closest-hit shader (triangle hit group).
+	.destroyShaders "bool"         --- If true, shaders will be destroyed when program is destroyed.
+	 { default = false }
 
 --- Destroy acceleration structure.
 func.destroy { cname = "destroy_acceleration_structure", section = "Acceleration Structures" }

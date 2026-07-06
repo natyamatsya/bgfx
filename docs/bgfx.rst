@@ -167,6 +167,7 @@ Individual capability flags.
 .. doxygendefine:: BGFX_CAPS_VIDEO_DECODE
 .. doxygendefine:: BGFX_CAPS_VIEWPORT_LAYER_ARRAY
 .. doxygendefine:: BGFX_CAPS_RAY_TRACING
+.. doxygendefine:: BGFX_CAPS_RAY_TRACING_PIPELINE
 .. doxygendefine:: BGFX_CAPS_TEXTURE_COMPARE_ALL
 
 Statistics

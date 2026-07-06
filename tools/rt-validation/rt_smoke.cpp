@@ -21,7 +21,7 @@ static const bgfx::Memory* loadBin(const char* path)
 
 int main(int argc, char** argv)
 {
-	if (argc < 2) { printf("usage: %s <rq.bin>\n", argv[0]); return 1; }
+	if (argc < 3) { printf("usage: %s <rq.bin> <deform.bin>\n", argv[0]); return 1; }
 	const uint32_t kW = 64, kH = 64;
 
 	bgfx::renderFrame();
@@ -46,7 +46,7 @@ int main(int argc, char** argv)
 	bgfx::VertexBufferHandle vbh = bgfx::createVertexBuffer(bgfx::copy(verts, sizeof(verts) ), layout);
 	bgfx::IndexBufferHandle  ibh = bgfx::createIndexBuffer (bgfx::copy(indices, sizeof(indices) ) );
 
-	bgfx::AccelerationStructureHandle blas = bgfx::createBlas(vbh, ibh);
+	bgfx::AccelerationStructureHandle blas = bgfx::createBlas(&vbh, &ibh, 1);
 	bgfx::AccelerationStructureHandle tlas = bgfx::createTlas(&blas, 1);
 	printf("blas valid=%d tlas valid=%d\n", bgfx::isValid(blas), bgfx::isValid(tlas) );
 
@@ -104,9 +104,66 @@ int main(int argc, char** argv)
 	bool pass2 = hits2 < (kW*kH/10);
 	printf(pass2 ? "RESULT2: PASS (rotated instance misses)\n" : "RESULT2: FAIL (still hitting)\n");
 
+	// Phase 3: multi-geometry BLAS. Geometry 0 sits far off the ray's path; geometry 1
+	// covers it -- a hit proves the build handles geometry entries beyond the first.
+	static const Vert vertsA[3] = { {98,-2,5}, {102,-2,5}, {100,2,5} };
+	static const Vert vertsB[3] = { {-2,-2,5}, {2,-2,5}, {0,2,5} };
+	bgfx::VertexBufferHandle vbhA = bgfx::createVertexBuffer(bgfx::copy(vertsA, sizeof(vertsA) ), layout);
+	bgfx::VertexBufferHandle vbhB = bgfx::createVertexBuffer(bgfx::copy(vertsB, sizeof(vertsB) ), layout, BGFX_BUFFER_COMPUTE_WRITE);
+	bgfx::IndexBufferHandle  ibhA = bgfx::createIndexBuffer(bgfx::copy(indices, sizeof(indices) ) );
+	bgfx::IndexBufferHandle  ibhB = bgfx::createIndexBuffer(bgfx::copy(indices, sizeof(indices) ) );
+
+	bgfx::VertexBufferHandle vbs[2] = { vbhA, vbhB };
+	bgfx::IndexBufferHandle  ibs[2] = { ibhA, ibhB };
+	bgfx::AccelerationStructureHandle blas2 = bgfx::createBlas(vbs, ibs, 2);
+	bgfx::AccelerationStructureHandle tlas2 = bgfx::createTlas(&blas2, 1);
+	bgfx::frame(); bgfx::frame();
+
+	bgfx::setAccelerationStructure(0, tlas2);
+	bgfx::setImage(1, outTex, 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);
+	bgfx::dispatch(0, prog, kW/8, kH/8, 1);
+	bgfx::blit(1, rbTex, 0, 0, outTex);
+	frameAvail = bgfx::readTexture(rbTex, pixels.data() );
+	while (frame < frameAvail) { frame = bgfx::frame(); }
+	uint32_t hits3 = 0;
+	for (uint32_t i = 0; i < kW*kH; ++i) { if (pixels[i*4] > 127) ++hits3; }
+	printf("multi-geometry BLAS: hit pixels %u / %u\n", hits3, kW*kH);
+	bool pass3 = hits3 > (kW*kH/2);
+	printf(pass3 ? "RESULT3: PASS (geometry 1 hit)\n" : "RESULT3: FAIL\n");
+
+	// Phase 4: refit. A compute shader moves geometry 1's vertices off the ray, then
+	// updateBlas refits the BLAS in place and the TLAS is rebuilt -- expect a miss.
+	bgfx::ProgramHandle deform = bgfx::createProgram(bgfx::createShader(loadBin(argv[2]) ), true);
+	if (!bgfx::isValid(deform) ) { printf("deform shader failed\n"); bgfx::shutdown(); return 1; }
+	bgfx::setBuffer(0, vbhB, bgfx::Access::ReadWrite);
+	bgfx::dispatch(0, deform, 1, 1, 1);
+	bgfx::frame();
+
+	bgfx::updateBlas(blas2);
+	float identity[16] = {};
+	identity[0] = identity[5] = identity[10] = identity[15] = 1.0f;
+	bgfx::updateTlas(tlas2, bgfx::copy(identity, sizeof(identity) ) );
+	bgfx::frame(); bgfx::frame();
+
+	bgfx::setAccelerationStructure(0, tlas2);
+	bgfx::setImage(1, outTex, 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);
+	bgfx::dispatch(0, prog, kW/8, kH/8, 1);
+	bgfx::blit(1, rbTex, 0, 0, outTex);
+	frameAvail = bgfx::readTexture(rbTex, pixels.data() );
+	while (frame < frameAvail) { frame = bgfx::frame(); }
+	uint32_t hits4 = 0;
+	for (uint32_t i = 0; i < kW*kH; ++i) { if (pixels[i*4] > 127) ++hits4; }
+	printf("after compute deform + updateBlas: hit pixels %u / %u\n", hits4, kW*kH);
+	bool pass4 = hits4 < (kW*kH/10);
+	printf(pass4 ? "RESULT4: PASS (refit geometry misses)\n" : "RESULT4: FAIL (still hitting)\n");
+
+	bgfx::destroy(tlas2); bgfx::destroy(blas2);
+	bgfx::destroy(deform);
+	bgfx::destroy(vbhA); bgfx::destroy(vbhB); bgfx::destroy(ibhA); bgfx::destroy(ibhB);
+
 	bgfx::destroy(tlas); bgfx::destroy(blas);
 	bgfx::destroy(rbTex); bgfx::destroy(outTex);
 	bgfx::destroy(prog); bgfx::destroy(vbh); bgfx::destroy(ibh);
 	bgfx::shutdown();
-	return (pass1 && pass2) ? 0 : 3;
+	return (pass1 && pass2 && pass3 && pass4) ? 0 : 3;
 }

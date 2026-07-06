@@ -1916,6 +1916,7 @@ namespace bgfx
 		CAPS_FLAGS(BGFX_CAPS_OCCLUSION_QUERY),
 		CAPS_FLAGS(BGFX_CAPS_PRIMITIVE_ID),
 		CAPS_FLAGS(BGFX_CAPS_RAY_TRACING),
+		CAPS_FLAGS(BGFX_CAPS_RAY_TRACING_PIPELINE),
 		CAPS_FLAGS(BGFX_CAPS_RENDERER_MULTITHREADED),
 		CAPS_FLAGS(BGFX_CAPS_SWAP_CHAIN),
 		CAPS_FLAGS(BGFX_CAPS_TEXTURE_2D_ARRAY),
@@ -2284,6 +2285,12 @@ namespace bgfx
 		{
 			return "Vertex";
 		}
+		else if (isShaderType(_magic, 'R') ) { return "RayGeneration"; }
+		else if (isShaderType(_magic, 'I') ) { return "Intersection";  }
+		else if (isShaderType(_magic, 'A') ) { return "AnyHit";        }
+		else if (isShaderType(_magic, 'H') ) { return "ClosestHit";    }
+		else if (isShaderType(_magic, 'M') ) { return "Miss";          }
+		else if (isShaderType(_magic, 'L') ) { return "Callable";      }
 
 		BX_ASSERT(false, "Invalid shader type!");
 
@@ -3518,13 +3525,29 @@ namespace bgfx
 					AccelerationStructureHandle handle;
 					_cmdbuf.read(handle);
 
-					VertexBufferHandle vertexBuffer;
-					_cmdbuf.read(vertexBuffer);
+					uint16_t num;
+					_cmdbuf.read(num);
 
-					IndexBufferHandle indexBuffer;
-					_cmdbuf.read(indexBuffer);
+					VertexBufferHandle vertexBuffers[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+					IndexBufferHandle  indexBuffers[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+					for (uint16_t ii = 0; ii < num; ++ii)
+					{
+						_cmdbuf.read(vertexBuffers[ii]);
+						_cmdbuf.read(indexBuffers[ii]);
+					}
 
-					m_renderCtx->createBlas(handle, vertexBuffer, indexBuffer);
+					m_renderCtx->createBlas(handle, vertexBuffers, indexBuffers, num);
+				}
+				break;
+
+			case CommandBuffer::UpdateBlas:
+				{
+					BGFX_PROFILER_SCOPE("UpdateBlas", kColorResource);
+
+					AccelerationStructureHandle handle;
+					_cmdbuf.read(handle);
+
+					m_renderCtx->updateBlas(handle);
 				}
 				break;
 
@@ -3727,6 +3750,26 @@ namespace bgfx
 					_cmdbuf.read(fsh);
 
 					m_renderCtx->createProgram(handle, vsh, fsh);
+				}
+				break;
+
+			case CommandBuffer::CreateRtProgram:
+				{
+					BGFX_PROFILER_SCOPE("CreateRtProgram", kColorResource);
+
+					ProgramHandle handle;
+					_cmdbuf.read(handle);
+
+					ShaderHandle rayGen;
+					_cmdbuf.read(rayGen);
+
+					ShaderHandle miss;
+					_cmdbuf.read(miss);
+
+					ShaderHandle closestHit;
+					_cmdbuf.read(closestHit);
+
+					m_renderCtx->createRtProgram(handle, rayGen, miss, closestHit);
 				}
 				break;
 
@@ -4937,10 +4980,22 @@ namespace bgfx
 		s_ctx->destroyVertexBuffer(_handle);
 	}
 
-	AccelerationStructureHandle createBlas(VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer)
+	AccelerationStructureHandle createBlas(const VertexBufferHandle* _vertexBuffers, const IndexBufferHandle* _indexBuffers, uint16_t _num)
 	{
 		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING, "Ray tracing is not supported!");
-		return s_ctx->createBlas(_vertexBuffer, _indexBuffer);
+		BX_ASSERT(NULL != _vertexBuffers && NULL != _indexBuffers, "Buffer arrays can't be NULL");
+		BX_ASSERT(0 < _num && _num <= BGFX_CONFIG_MAX_BLAS_GEOMETRIES
+			, "BLAS geometry count %d is out of range [1, %d]."
+			, _num
+			, BGFX_CONFIG_MAX_BLAS_GEOMETRIES
+			);
+		return s_ctx->createBlas(_vertexBuffers, _indexBuffers, _num);
+	}
+
+	void updateBlas(AccelerationStructureHandle _handle)
+	{
+		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING, "Ray tracing is not supported!");
+		s_ctx->updateBlas(_handle);
 	}
 
 	AccelerationStructureHandle createTlas(const AccelerationStructureHandle* _blases, uint16_t _num)
@@ -5145,6 +5200,12 @@ namespace bgfx
 	void setName(ShaderHandle _handle, const char* _name, int32_t _len)
 	{
 		s_ctx->setName(_handle, bx::StringView(_name, _len) );
+	}
+
+	ProgramHandle createRtProgram(ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit, bool _destroyShaders)
+	{
+		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING_PIPELINE, "Ray tracing pipelines are not supported!");
+		return s_ctx->createRtProgram(_rayGen, _miss, _closestHit, _destroyShaders);
 	}
 
 	void destroy(ShaderHandle _handle)

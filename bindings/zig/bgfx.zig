@@ -701,6 +701,9 @@ pub const CapsFlags_ViewportLayerArray: CapsFlags     = 0x0000000400000000;
 /// Ray tracing is supported.
 pub const CapsFlags_RayTracing: CapsFlags             = 0x0000000800000000;
 
+/// Ray tracing pipelines (raygen/miss/hit shaders) are supported.
+pub const CapsFlags_RayTracingPipeline: CapsFlags     = 0x0000001000000000;
+
 /// All texture compare modes are supported.
 pub const CapsFlags_TextureCompareAll: CapsFlags      = 0x0000000000180000;
 
@@ -2642,14 +2645,27 @@ pub inline fn destroyVertexLayout(_layoutHandle: VertexLayoutHandle) void {
 }
 extern fn bgfx_destroy_vertex_layout(_layoutHandle: VertexLayoutHandle) void;
 
-/// Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+/// Create a bottom-level acceleration structure (BLAS) from one or more triangle
+/// geometries. Built refit-capable: after the contents of the vertex buffers change
+/// (e.g. deformed by a compute shader via `BGFX_BUFFER_COMPUTE_WRITE`), call `updateBlas`.
 /// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
-/// <param name="_vertexBuffer">Vertex buffer with the geometry positions.</param>
-/// <param name="_indexBuffer">Index buffer describing the triangles.</param>
-pub inline fn createBlas(_vertexBuffer: VertexBufferHandle, _indexBuffer: IndexBufferHandle) AccelerationStructureHandle {
-    return bgfx_create_blas(_vertexBuffer, _indexBuffer);
+/// <param name="_vertexBuffers">Vertex buffers with the geometry positions, one per geometry.</param>
+/// <param name="_indexBuffers">Index buffers describing the triangles, one per geometry.</param>
+/// <param name="_num">Number of geometries.</param>
+pub inline fn createBlas(_vertexBuffers: [*c]const VertexBufferHandle, _indexBuffers: [*c]const IndexBufferHandle, _num: u16) AccelerationStructureHandle {
+    return bgfx_create_blas(_vertexBuffers, _indexBuffers, _num);
 }
-extern fn bgfx_create_blas(_vertexBuffer: VertexBufferHandle, _indexBuffer: IndexBufferHandle) AccelerationStructureHandle;
+extern fn bgfx_create_blas(_vertexBuffers: [*c]const VertexBufferHandle, _indexBuffers: [*c]const IndexBufferHandle, _num: u16) AccelerationStructureHandle;
+
+/// Refit a bottom-level acceleration structure after its source vertex buffers changed.
+/// Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
+/// referencing this BLAS should be updated afterwards (see `updateTlas`).
+/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+/// <param name="_handle">Bottom-level acceleration structure handle.</param>
+pub inline fn updateBlas(_handle: AccelerationStructureHandle) void {
+    return bgfx_update_blas(_handle);
+}
+extern fn bgfx_update_blas(_handle: AccelerationStructureHandle) void;
 
 /// Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
 /// acceleration structures. All instances start with the identity transform; use
@@ -2671,6 +2687,19 @@ pub inline fn updateTlas(_handle: AccelerationStructureHandle, _mem: [*c]const M
     return bgfx_update_tlas(_handle, _mem);
 }
 extern fn bgfx_update_tlas(_handle: AccelerationStructureHandle, _mem: [*c]const Memory) void;
+
+/// Create a ray-tracing pipeline program from a ray-generation, a miss, and a (triangle)
+/// closest-hit shader. Dispatch with `dispatch`; for a ray-tracing program the dispatch
+/// dimensions are the ray-grid size in RAYS (not workgroups).
+/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING_PIPELINE`.
+/// <param name="_rayGen">Ray-generation shader.</param>
+/// <param name="_miss">Miss shader.</param>
+/// <param name="_closestHit">Closest-hit shader (triangle hit group).</param>
+/// <param name="_destroyShaders">If true, shaders will be destroyed when program is destroyed.</param>
+pub inline fn createRtProgram(_rayGen: ShaderHandle, _miss: ShaderHandle, _closestHit: ShaderHandle, _destroyShaders: bool) ProgramHandle {
+    return bgfx_create_rt_program(_rayGen, _miss, _closestHit, _destroyShaders);
+}
+extern fn bgfx_create_rt_program(_rayGen: ShaderHandle, _miss: ShaderHandle, _closestHit: ShaderHandle, _destroyShaders: bool) ProgramHandle;
 
 /// Destroy acceleration structure.
 /// <param name="_handle">Acceleration structure handle.</param>

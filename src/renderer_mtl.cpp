@@ -1357,32 +1357,47 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			m_vertexBuffers[_handle.idx].create(_mem->size, _mem->data, _layoutHandle, _flags);
 		}
 
-		void createBlas(AccelerationStructureHandle _handle, VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) override
+		void createBlas(AccelerationStructureHandle _handle, const VertexBufferHandle* _vertexBuffers, const IndexBufferHandle* _indexBuffers, uint16_t _num) override
 		{
-			const VertexBufferMtl& vb = m_vertexBuffers[_vertexBuffer.idx];
-			const BufferMtl&       ib = m_indexBuffers[_indexBuffer.idx];
+			AccelerationStructureMtl::Geometry geometries[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+			for (uint16_t ii = 0; ii < _num; ++ii)
+			{
+				const VertexBufferMtl& vb = m_vertexBuffers[_vertexBuffers[ii].idx];
+				const BufferMtl&       ib = m_indexBuffers[_indexBuffers[ii].idx];
 
-			const uint32_t stride = m_vertexLayouts[vb.m_layoutHandle.idx].m_stride;
-			const uint32_t numVertices = stride > 0 ? vb.m_size / stride : 0;
+				const uint32_t stride = m_vertexLayouts[vb.m_layoutHandle.idx].m_stride;
+				const bool index32 = 0 != (ib.m_flags & BGFX_BUFFER_INDEX32);
 
-			const bool index32 = 0 != (ib.m_flags & BGFX_BUFFER_INDEX32);
-			const uint32_t numTriangles = (ib.m_size / (index32 ? 4 : 2) ) / 3;
+				AccelerationStructureMtl::Geometry& geometry = geometries[ii];
+				geometry.m_vertexBuffer = vb.m_ptr;
+				geometry.m_indexBuffer  = ib.m_ptr;
+				geometry.m_vertexStride = stride;
+				geometry.m_numTriangles = (ib.m_size / (index32 ? 4 : 2) ) / 3;
+				geometry.m_index32      = index32;
+			}
 
 			m_accelerationStructures[_handle.idx].createBlas(
 				  m_device
 				, getAccelerationStructureCommandEncoder()
-				, vb
-				, stride
-				, numVertices
-				, ib
-				, index32
-				, numTriangles
+				, geometries
+				, _num
 				);
 
 			// End the encoder so the build completes before anything (e.g. a TLAS that
 			// instances this BLAS) depends on it -- acceleration-structure builds are not
 			// ordered within a single encoder.
 			endEncoding();
+		}
+
+		void updateBlas(AccelerationStructureHandle _handle) override
+		{
+			m_accelerationStructures[_handle.idx].updateBlas(getAccelerationStructureCommandEncoder() );
+			endEncoding();
+		}
+
+		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit) override
+		{
+			BX_UNUSED(_handle, _rayGen, _miss, _closestHit);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
@@ -4080,34 +4095,52 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		}
 	}
 
-	void AccelerationStructureMtl::createBlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const BufferMtl& _vertexBuffer, uint32_t _vertexStride, uint32_t _numVertices, const BufferMtl& _indexBuffer, bool _index32, uint32_t _numTriangles)
+	void AccelerationStructureMtl::createBlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const Geometry* _geometries, uint16_t _num)
 	{
-		BX_UNUSED(_numVertices);
+		// One opaque triangle geometry descriptor per entry. Position is assumed to be at
+		// vertex offset 0 in float3 form (the common bgfx layout). Opaque is required for
+		// inline ray query to auto-commit hits.
+		NS::Object* geoDescs[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+		for (uint16_t ii = 0; ii < _num; ++ii)
+		{
+			const Geometry& src = _geometries[ii];
 
-		// A single opaque triangle geometry. Position is assumed to be at vertex offset 0 in
-		// float3 form (the common bgfx layout / what the Cornell Box uses).
-		MTL::AccelerationStructureTriangleGeometryDescriptor* triGeo = MTL::AccelerationStructureTriangleGeometryDescriptor::alloc()->init();
-		triGeo->setOpaque(true); // inline ray query auto-commits only opaque geometry
-		triGeo->setVertexBuffer(_vertexBuffer.m_ptr);
-		triGeo->setVertexBufferOffset(0);
-		triGeo->setVertexStride(_vertexStride);
-		triGeo->setVertexFormat(MTL::AttributeFormatFloat3);
-		triGeo->setIndexBuffer(_indexBuffer.m_ptr);
-		triGeo->setIndexBufferOffset(0);
-		triGeo->setIndexType(_index32 ? MTL::IndexTypeUInt32 : MTL::IndexTypeUInt16);
-		triGeo->setTriangleCount(_numTriangles);
+			MTL::AccelerationStructureTriangleGeometryDescriptor* triGeo = MTL::AccelerationStructureTriangleGeometryDescriptor::alloc()->init();
+			triGeo->setOpaque(true);
+			triGeo->setVertexBuffer(src.m_vertexBuffer);
+			triGeo->setVertexBufferOffset(0);
+			triGeo->setVertexStride(src.m_vertexStride);
+			triGeo->setVertexFormat(MTL::AttributeFormatFloat3);
+			triGeo->setIndexBuffer(src.m_indexBuffer);
+			triGeo->setIndexBufferOffset(0);
+			triGeo->setIndexType(src.m_index32 ? MTL::IndexTypeUInt32 : MTL::IndexTypeUInt16);
+			triGeo->setTriangleCount(src.m_numTriangles);
+			geoDescs[ii] = triGeo;
+		}
 
 		MTL::PrimitiveAccelerationStructureDescriptor* desc = MTL::PrimitiveAccelerationStructureDescriptor::alloc()->init();
-		desc->setGeometryDescriptors(NS::Array::array( (const NS::Object*)triGeo) );
+		desc->setGeometryDescriptors(NS::Array::array( (const NS::Object* const*)geoDescs, _num) );
+		desc->setUsage(MTL::AccelerationStructureUsageRefit); // updateBlas refits in place
+
+		for (uint16_t ii = 0; ii < _num; ++ii)
+		{
+			geoDescs[ii]->release(); // retained by the descriptor's array
+		}
 
 		const MTL::AccelerationStructureSizes sizes = _device->accelerationStructureSizes(desc);
 		m_accelerationStructure = _device->newAccelerationStructure(sizes.accelerationStructureSize);
-		m_scratchBuffer         = _device->newBuffer(sizes.buildScratchBufferSize, MTL::ResourceStorageModePrivate);
+		// One scratch buffer serves both the initial build and later refits.
+		m_scratchBuffer = _device->newBuffer(bx::max(sizes.buildScratchBufferSize, sizes.refitScratchBufferSize), MTL::ResourceStorageModePrivate);
+		m_blasDesc = desc; // kept (retained) for refit
 
 		_encoder->buildAccelerationStructure(m_accelerationStructure, desc, m_scratchBuffer, 0);
+	}
 
-		triGeo->release();
-		desc->release();
+	void AccelerationStructureMtl::updateBlas(MTL::AccelerationStructureCommandEncoder* _encoder)
+	{
+		// In-place refit (NULL destination) against the retained descriptor; the geometry
+		// descriptors reference the same vertex/index buffers whose contents changed.
+		_encoder->refitAccelerationStructure(m_accelerationStructure, m_blasDesc, (MTL::AccelerationStructure*)NULL, m_scratchBuffer, 0);
 	}
 
 	void AccelerationStructureMtl::createTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, MTL::AccelerationStructure* const* _blases, uint16_t _num)
@@ -4183,6 +4216,7 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 	void AccelerationStructureMtl::destroy()
 	{
 		MTL_RELEASE_W(m_accelerationStructure, 0);
+		MTL_RELEASE_W(m_blasDesc, 0);
 		MTL_RELEASE_W(m_scratchBuffer, 0);
 		MTL_RELEASE_W(m_instanceBuffer, 0);
 		m_numInstances = 0; // the BLAS list is not owned (owned by the BLAS objects)

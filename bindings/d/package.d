@@ -510,6 +510,7 @@ enum CapFlags: CapFlags_{
 	videoDecode             = 0x0000_0002_0000_0000, ///Hardware video decode is supported.
 	viewportLayerArray      = 0x0000_0004_0000_0000, ///Viewport layer is available in vertex shader.
 	rayTracing              = 0x0000_0008_0000_0000, ///Ray tracing is supported.
+	rayTracingPipeline      = 0x0000_0010_0000_0000, ///Ray tracing pipelines (raygen/miss/hit shaders) are supported.
 	textureCompareAll       = 0x0000_0000_0018_0000, ///All texture compare modes are supported.
 }
 
@@ -2516,13 +2517,26 @@ mixin(joinFnBinds((){
 		{q{void}, q{destroy}, q{VertexLayoutHandle layoutHandle}, ext: `C++, "bgfx"`},
 		
 		/**
-		* Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+		* Create a bottom-level acceleration structure (BLAS) from one or more triangle
+		* geometries. Built refit-capable: after the contents of the vertex buffers change
+		* (e.g. deformed by a compute shader via `BGFX_BUFFER_COMPUTE_WRITE`), call `updateBlas`.
 		* Attention: Availability depends on: `BGFX_CAPS_RAY_TRACING`.
 		Params:
-			vertexBuffer = Vertex buffer with the geometry positions.
-			indexBuffer = Index buffer describing the triangles.
+			vertexBuffers = Vertex buffers with the geometry positions, one per geometry.
+			indexBuffers = Index buffers describing the triangles, one per geometry.
+			num = Number of geometries.
 		*/
-		{q{AccelerationStructureHandle}, q{createBlas}, q{VertexBufferHandle vertexBuffer, IndexBufferHandle indexBuffer}, ext: `C++, "bgfx"`},
+		{q{AccelerationStructureHandle}, q{createBlas}, q{const(VertexBufferHandle)* vertexBuffers, const(IndexBufferHandle)* indexBuffers, ushort num}, ext: `C++, "bgfx"`},
+		
+		/**
+		* Refit a bottom-level acceleration structure after its source vertex buffers changed.
+		* Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
+		* referencing this BLAS should be updated afterwards (see `updateTlas`).
+		* Attention: Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+		Params:
+			handle = Bottom-level acceleration structure handle.
+		*/
+		{q{void}, q{updateBlas}, q{AccelerationStructureHandle handle}, ext: `C++, "bgfx"`},
 		
 		/**
 		* Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
@@ -2544,6 +2558,19 @@ mixin(joinFnBinds((){
 			mem = One 4x4 matrix per instance (as produced by `bx::mtx*`), in `createTlas` order.
 		*/
 		{q{void}, q{updateTlas}, q{AccelerationStructureHandle handle, const(Memory)* mem}, ext: `C++, "bgfx"`},
+		
+		/**
+		* Create a ray-tracing pipeline program from a ray-generation, a miss, and a (triangle)
+		* closest-hit shader. Dispatch with `dispatch`; for a ray-tracing program the dispatch
+		* dimensions are the ray-grid size in RAYS (not workgroups).
+		* Attention: Availability depends on: `BGFX_CAPS_RAY_TRACING_PIPELINE`.
+		Params:
+			rayGen = Ray-generation shader.
+			miss = Miss shader.
+			closestHit = Closest-hit shader (triangle hit group).
+			destroyShaders = If true, shaders will be destroyed when program is destroyed.
+		*/
+		{q{ProgramHandle}, q{createRtProgram}, q{ShaderHandle rayGen, ShaderHandle miss, ShaderHandle closestHit, bool destroyShaders=false}, ext: `C++, "bgfx"`},
 		
 		/**
 		* Destroy acceleration structure.

@@ -300,13 +300,25 @@ namespace bgfx { namespace mtl
 	{
 		AccelerationStructureMtl()
 			: m_accelerationStructure(NULL)
+			, m_blasDesc(NULL)
 			, m_scratchBuffer(NULL)
 			, m_instanceBuffer(NULL)
 			, m_numInstances(0)
 		{
 		}
 
-		void createBlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const BufferMtl& _vertexBuffer, uint32_t _vertexStride, uint32_t _numVertices, const BufferMtl& _indexBuffer, bool _index32, uint32_t _numTriangles);
+		// One triangle geometry of a BLAS.
+		struct Geometry
+		{
+			MTL::Buffer* m_vertexBuffer;
+			MTL::Buffer* m_indexBuffer;
+			uint32_t     m_vertexStride;
+			uint32_t     m_numTriangles;
+			bool         m_index32;
+		};
+
+		void createBlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const Geometry* _geometries, uint16_t _num);
+		void updateBlas(MTL::AccelerationStructureCommandEncoder* _encoder); // refit after the vertex data changed
 		void createTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, MTL::AccelerationStructure* const* _blases, uint16_t _num);
 		void updateTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const float* _transforms); // m_numInstances 4x4 bx matrices
 		void destroy();
@@ -314,6 +326,7 @@ namespace bgfx { namespace mtl
 		void buildTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, bool _create);
 
 		MTL::AccelerationStructure* m_accelerationStructure;
+		MTL::AccelerationStructureDescriptor* m_blasDesc; // BLAS only; retained for refit
 		MTL::Buffer*                m_scratchBuffer;
 		MTL::Buffer*                m_instanceBuffer;
 		// For a TLAS: the referenced BLASes (need explicit residency when bound).

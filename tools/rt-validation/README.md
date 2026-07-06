@@ -4,13 +4,22 @@ Headless harnesses that exercise the bgfx ray-tracing runtime end to end
 (`createBlas` / `createTlas` / `updateTlas` / `setAccelerationStructure` + ray-query
 dispatch) without a window, on any backend reporting `BGFX_CAPS_RAY_TRACING`.
 
-- `rt_smoke.cpp` — triangle BLAS/TLAS hit test (expects 4096/4096 hit pixels), then an
-  `updateTlas` rotation test (rotates the instance 90°; expects 0/4096). Exit 0 = pass.
+- `rt_smoke.cpp` — four phases, exit 0 = all pass: (1) triangle BLAS/TLAS hit test
+  (expects 4096/4096 hit pixels); (2) `updateTlas` rotation test (rotates the instance
+  90°; expects 0/4096); (3) multi-geometry BLAS (a hit on geometry index 1);
+  (4) refit: a compute shader (`cs_rt_deform.slang`) moves the vertices of a
+  `BGFX_BUFFER_COMPUTE_WRITE` vertex buffer off the ray, `updateBlas` refits in place
+  (expects a miss).
 - `rt_cornellbox.cpp` — the full 52-cornellbox pipeline (tracer + temporal reprojection +
   a-trous denoiser + ReSTIR stage) writing PPM images for cross-backend comparison. Uses
   the example's compiled shaders from `examples/runtime/shaders/<target>/`.
 - `cs_rt_smoke.slang` — the smoke test's ray-query shader; compile with shaderc for the
   target backend (`-p metal --platform osx` / `-p spirv --platform linux`).
+- `rt_pipeline_smoke.cpp` — the ray-tracing **pipeline** smoke test: creates a
+  raygen+miss+closesthit program (`bgfx::createRtProgram`, `BGFX_CAPS_RAY_TRACING_PIPELINE`)
+  and traces the same triangle via `bgfx::dispatch` (ray-grid dimensions in rays). Skips
+  cleanly where the cap is absent (e.g. Metal). Stage shaders: `rt_pipe_{rg,miss,chit}.slang`
+  compiled with `--type raygeneration|miss|closesthit -p spirv`.
 
 ## Metal (macOS host)
 
@@ -19,7 +28,7 @@ dispatch) without a window, on any backend reporting `BGFX_CAPS_RAY_TRACING`.
         -framework Metal -framework Foundation -framework QuartzCore -framework Cocoa \
         -framework IOKit -framework CoreFoundation -framework CoreMedia \
         -framework VideoToolbox -framework CoreVideo -o rt_smoke
-    ./rt_smoke cs_rt_smoke_metal.bin
+    ./rt_smoke cs_rt_smoke_metal.bin cs_rt_deform_metal.bin
 
 ## Vulkan without RT hardware: lavapipe (Mesa software Vulkan)
 
@@ -43,7 +52,8 @@ rejects):
     container exec lava bash -c 'cd /work/bgfx/tools/rt-validation && \
         g++ -std=c++20 -DBX_CONFIG_DEBUG=0 -I ../../include -I ../../../bx/include \
         rt_smoke.cpp ../../.build/linux32_arm_gcc/bin/lib{bgfx,bimg,bimg_decode,bx}Release.a \
-        -lGL -lX11 -ldl -lpthread -lrt -o rt_smoke && ./rt_smoke cs_rt_smoke_spirv.bin'
+        -lGL -lX11 -ldl -lpthread -lrt -o rt_smoke && \
+        ./rt_smoke cs_rt_smoke_spirv.bin cs_rt_deform_spirv.bin'
 
 ## Cross-backend image comparison
 

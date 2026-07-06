@@ -2575,10 +2575,13 @@ namespace bgfx
 	///
 	void destroy(VertexLayoutHandle _layoutHandle);
 
-	/// Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+	/// Create a bottom-level acceleration structure (BLAS) from one or more triangle
+	/// geometries. Built refit-capable: after the contents of the vertex buffers change
+	/// (e.g. deformed by a compute shader via `BGFX_BUFFER_COMPUTE_WRITE`), call `updateBlas`.
 	///
-	/// @param[in] _vertexBuffer Vertex buffer with the geometry positions.
-	/// @param[in] _indexBuffer Index buffer describing the triangles.
+	/// @param[in] _vertexBuffers Vertex buffers with the geometry positions, one per geometry.
+	/// @param[in] _indexBuffers Index buffers describing the triangles, one per geometry.
+	/// @param[in] _num Number of geometries.
 	///
 	/// @returns Acceleration structure handle.
 	///
@@ -2587,9 +2590,22 @@ namespace bgfx
 	/// @attention C99's equivalent binding is `bgfx_create_blas`.
 	///
 	AccelerationStructureHandle createBlas(
-		  VertexBufferHandle _vertexBuffer
-		, IndexBufferHandle _indexBuffer
+		  const VertexBufferHandle* _vertexBuffers
+		, const IndexBufferHandle* _indexBuffers
+		, uint16_t _num
 		);
+
+	/// Refit a bottom-level acceleration structure after its source vertex buffers changed.
+	/// Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
+	/// referencing this BLAS should be updated afterwards (see `updateTlas`).
+	///
+	/// @param[in] _handle Bottom-level acceleration structure handle.
+	///
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	///
+	/// @attention C99's equivalent binding is `bgfx_update_blas`.
+	///
+	void updateBlas(AccelerationStructureHandle _handle);
 
 	/// Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
 	/// acceleration structures. All instances start with the identity transform; use
@@ -2622,6 +2638,28 @@ namespace bgfx
 	void updateTlas(
 		  AccelerationStructureHandle _handle
 		, const Memory* _mem
+		);
+
+	/// Create a ray-tracing pipeline program from a ray-generation, a miss, and a (triangle)
+	/// closest-hit shader. Dispatch with `dispatch`; for a ray-tracing program the dispatch
+	/// dimensions are the ray-grid size in RAYS (not workgroups).
+	///
+	/// @param[in] _rayGen Ray-generation shader.
+	/// @param[in] _miss Miss shader.
+	/// @param[in] _closestHit Closest-hit shader (triangle hit group).
+	/// @param[in] _destroyShaders If true, shaders will be destroyed when program is destroyed.
+	///
+	/// @returns Program handle.
+	///
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING_PIPELINE`.
+	///
+	/// @attention C99's equivalent binding is `bgfx_create_rt_program`.
+	///
+	ProgramHandle createRtProgram(
+		  ShaderHandle _rayGen
+		, ShaderHandle _miss
+		, ShaderHandle _closestHit
+		, bool _destroyShaders = false
 		);
 
 	/// Destroy acceleration structure.

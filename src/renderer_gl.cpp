@@ -3244,9 +3244,19 @@ namespace bgfx { namespace gl
 			m_vertexBuffers[_handle.idx].create(_mem->size, _mem->data, _layoutHandle, _flags);
 		}
 
-		void createBlas(AccelerationStructureHandle _handle, VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) override
+		void createBlas(AccelerationStructureHandle _handle, const VertexBufferHandle* _vertexBuffers, const IndexBufferHandle* _indexBuffers, uint16_t _num) override
 		{
-			BX_UNUSED(_handle, _vertexBuffer, _indexBuffer);
+			BX_UNUSED(_handle, _vertexBuffers, _indexBuffers, _num);
+		}
+
+		void updateBlas(AccelerationStructureHandle _handle) override
+		{
+			BX_UNUSED(_handle);
+		}
+
+		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit) override
+		{
+			BX_UNUSED(_handle, _rayGen, _miss, _closestHit);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
