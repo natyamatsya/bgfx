@@ -2542,13 +2542,25 @@ mixin(joinFnBinds((){
 		{q{AccelerationStructureHandle}, q{createBlas}, q{VertexBufferHandle vertexBuffer, IndexBufferHandle indexBuffer}, ext: `C++, "bgfx"`},
 		
 		/**
-		* Create a top-level acceleration structure (TLAS) with a single BLAS instance
-		* (identity transform).
+		* Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
+		* acceleration structures. All instances start with the identity transform; use
+		* `updateTlas` to set per-instance transforms.
 		* Attention: Availability depends on: `BGFX_CAPS_RAY_TRACING`.
 		Params:
-			blas = Bottom-level acceleration structure to instance.
+			blases = Bottom-level acceleration structures, one per instance.
+			num = Number of instances.
 		*/
-		{q{AccelerationStructureHandle}, q{createTlas}, q{AccelerationStructureHandle blas}, ext: `C++, "bgfx"`},
+		{q{AccelerationStructureHandle}, q{createTlas}, q{const(AccelerationStructureHandle)* blases, ushort num}, ext: `C++, "bgfx"`},
+		
+		/**
+		* Update the per-instance transforms of a top-level acceleration structure and rebuild
+		* it in place.
+		* Attention: Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+		Params:
+			handle = Top-level acceleration structure handle.
+			mem = One 4x4 matrix per instance (as produced by `bx::mtx*`), in `createTlas` order.
+		*/
+		{q{void}, q{updateTlas}, q{AccelerationStructureHandle handle, const(Memory)* mem}, ext: `C++, "bgfx"`},
 		
 		/**
 		* Destroy acceleration structure.

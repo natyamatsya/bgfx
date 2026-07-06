@@ -2255,9 +2255,14 @@ namespace bgfx { namespace d3d12
 			BX_UNUSED(_handle, _vertexBuffer, _indexBuffer);
 		}
 
-		void createTlas(AccelerationStructureHandle _handle, AccelerationStructureHandle _blas) override
+		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
 		{
-			BX_UNUSED(_handle, _blas);
+			BX_UNUSED(_handle, _blases, _num);
+		}
+
+		void updateTlas(AccelerationStructureHandle _handle, const Memory* _mem) override
+		{
+			BX_UNUSED(_handle, _mem);
 		}
 
 		void destroyAccelerationStructure(AccelerationStructureHandle _handle) override

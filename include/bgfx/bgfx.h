@@ -2584,10 +2584,12 @@ namespace bgfx
 		, IndexBufferHandle _indexBuffer
 		);
 
-	/// Create a top-level acceleration structure (TLAS) with a single BLAS instance
-	/// (identity transform).
+	/// Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
+	/// acceleration structures. All instances start with the identity transform; use
+	/// `updateTlas` to set per-instance transforms.
 	///
-	/// @param[in] _blas Bottom-level acceleration structure to instance.
+	/// @param[in] _blases Bottom-level acceleration structures, one per instance.
+	/// @param[in] _num Number of instances.
 	///
 	/// @returns Acceleration structure handle.
 	///
@@ -2595,7 +2597,25 @@ namespace bgfx
 	///
 	/// @attention C99's equivalent binding is `bgfx_create_tlas`.
 	///
-	AccelerationStructureHandle createTlas(AccelerationStructureHandle _blas);
+	AccelerationStructureHandle createTlas(
+		  const AccelerationStructureHandle* _blases
+		, uint16_t _num
+		);
+
+	/// Update the per-instance transforms of a top-level acceleration structure and rebuild
+	/// it in place.
+	///
+	/// @param[in] _handle Top-level acceleration structure handle.
+	/// @param[in] _mem One 4x4 matrix per instance (as produced by `bx::mtx*`), in `createTlas` order.
+	///
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	///
+	/// @attention C99's equivalent binding is `bgfx_update_tlas`.
+	///
+	void updateTlas(
+		  AccelerationStructureHandle _handle
+		, const Memory* _mem
+		);
 
 	/// Destroy acceleration structure.
 	///

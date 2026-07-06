@@ -1642,16 +1642,29 @@ BGFX_C_API void bgfx_destroy_vertex_layout(bgfx_vertex_layout_handle_t _layoutHa
 BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_blas(bgfx_vertex_buffer_handle_t _vertexBuffer, bgfx_index_buffer_handle_t _indexBuffer);
 
 /**
- * Create a top-level acceleration structure (TLAS) with a single BLAS instance
- * (identity transform).
+ * Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
+ * acceleration structures. All instances start with the identity transform; use
+ * `updateTlas` to set per-instance transforms.
  * @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
  *
- * @param[in] _blas Bottom-level acceleration structure to instance.
+ * @param[in] _blases Bottom-level acceleration structures, one per instance.
+ * @param[in] _num Number of instances.
  *
  * @returns Acceleration structure handle.
  *
  */
-BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_tlas(bgfx_acceleration_structure_handle_t _blas);
+BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_tlas(const bgfx_acceleration_structure_handle_t* _blases, uint16_t _num);
+
+/**
+ * Update the per-instance transforms of a top-level acceleration structure and rebuild
+ * it in place.
+ * @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+ *
+ * @param[in] _handle Top-level acceleration structure handle.
+ * @param[in] _mem One 4x4 matrix per instance (as produced by `bx::mtx*`), in `createTlas` order.
+ *
+ */
+BGFX_C_API void bgfx_update_tlas(bgfx_acceleration_structure_handle_t _handle, const bgfx_memory_t* _mem);
 
 /**
  * Destroy acceleration structure.
@@ -4099,6 +4112,7 @@ typedef enum bgfx_function_id
     BGFX_FUNCTION_ID_DESTROY_VERTEX_LAYOUT,
     BGFX_FUNCTION_ID_CREATE_BLAS,
     BGFX_FUNCTION_ID_CREATE_TLAS,
+    BGFX_FUNCTION_ID_UPDATE_TLAS,
     BGFX_FUNCTION_ID_DESTROY_ACCELERATION_STRUCTURE,
     BGFX_FUNCTION_ID_CREATE_VERTEX_BUFFER,
     BGFX_FUNCTION_ID_SET_VERTEX_BUFFER_NAME,
@@ -4318,7 +4332,8 @@ struct bgfx_interface_vtbl
     bgfx_vertex_layout_handle_t (*create_vertex_layout)(const bgfx_vertex_layout_t * _layout);
     void (*destroy_vertex_layout)(bgfx_vertex_layout_handle_t _layoutHandle);
     bgfx_acceleration_structure_handle_t (*create_blas)(bgfx_vertex_buffer_handle_t _vertexBuffer, bgfx_index_buffer_handle_t _indexBuffer);
-    bgfx_acceleration_structure_handle_t (*create_tlas)(bgfx_acceleration_structure_handle_t _blas);
+    bgfx_acceleration_structure_handle_t (*create_tlas)(const bgfx_acceleration_structure_handle_t* _blases, uint16_t _num);
+    void (*update_tlas)(bgfx_acceleration_structure_handle_t _handle, const bgfx_memory_t* _mem);
     void (*destroy_acceleration_structure)(bgfx_acceleration_structure_handle_t _handle);
     bgfx_vertex_buffer_handle_t (*create_vertex_buffer)(const bgfx_memory_t* _mem, const bgfx_vertex_layout_t * _layout, uint16_t _flags);
     void (*set_vertex_buffer_name)(bgfx_vertex_buffer_handle_t _handle, const char* _name, int32_t _len);

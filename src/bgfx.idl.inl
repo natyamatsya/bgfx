@@ -278,12 +278,17 @@ BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_blas(bgfx_vertex_buf
 	return handle_ret.c;
 }
 
-BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_tlas(bgfx_acceleration_structure_handle_t _blas)
+BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_tlas(const bgfx_acceleration_structure_handle_t* _blases, uint16_t _num)
 {
-	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } blas = { _blas };
 	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } handle_ret;
-	handle_ret.cpp = bgfx::createTlas(blas.cpp);
+	handle_ret.cpp = bgfx::createTlas((const bgfx::AccelerationStructureHandle*)_blases, _num);
 	return handle_ret.c;
+}
+
+BGFX_C_API void bgfx_update_tlas(bgfx_acceleration_structure_handle_t _handle, const bgfx_memory_t* _mem)
+{
+	union { bgfx_acceleration_structure_handle_t c; bgfx::AccelerationStructureHandle cpp; } handle = { _handle };
+	bgfx::updateTlas(handle.cpp, (const bgfx::Memory*)_mem);
 }
 
 BGFX_C_API void bgfx_destroy_acceleration_structure(bgfx_acceleration_structure_handle_t _handle)
@@ -1432,6 +1437,7 @@ BGFX_C_API bgfx_interface_vtbl_t* bgfx_get_interface(uint32_t _version)
 			bgfx_destroy_vertex_layout,
 			bgfx_create_blas,
 			bgfx_create_tlas,
+			bgfx_update_tlas,
 			bgfx_destroy_acceleration_structure,
 			bgfx_create_vertex_buffer,
 			bgfx_set_vertex_buffer_name,

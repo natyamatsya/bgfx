@@ -1573,12 +1573,22 @@ func.createBlas { section = "Acceleration Structures" }
 	.vertexBuffer "VertexBufferHandle"  --- Vertex buffer with the geometry positions.
 	.indexBuffer  "IndexBufferHandle"   --- Index buffer describing the triangles.
 
---- Create a top-level acceleration structure (TLAS) with a single BLAS instance
---- (identity transform).
+--- Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
+--- acceleration structures. All instances start with the identity transform; use
+--- `updateTlas` to set per-instance transforms.
 --- @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
 func.createTlas { section = "Acceleration Structures" }
-	"AccelerationStructureHandle"       --- Acceleration structure handle.
-	.blas "AccelerationStructureHandle" --- Bottom-level acceleration structure to instance.
+	"AccelerationStructureHandle"                --- Acceleration structure handle.
+	.blases "const AccelerationStructureHandle*" --- Bottom-level acceleration structures, one per instance.
+	.num    "uint16_t"                           --- Number of instances.
+
+--- Update the per-instance transforms of a top-level acceleration structure and rebuild
+--- it in place.
+--- @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+func.updateTlas { section = "Acceleration Structures" }
+	"void"
+	.handle "AccelerationStructureHandle" --- Top-level acceleration structure handle.
+	.mem    "const Memory*"               --- One 4x4 matrix per instance (as produced by `bx::mtx*`), in `createTlas` order.
 
 --- Destroy acceleration structure.
 func.destroy { cname = "destroy_acceleration_structure", section = "Acceleration Structures" }

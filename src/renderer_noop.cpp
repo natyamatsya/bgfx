@@ -129,7 +129,11 @@ namespace bgfx { namespace noop
 		{
 		}
 
-		void createTlas(AccelerationStructureHandle /*_handle*/, AccelerationStructureHandle /*_blas*/) override
+		void createTlas(AccelerationStructureHandle /*_handle*/, const AccelerationStructureHandle* /*_blases*/, uint16_t /*_num*/) override
+		{
+		}
+
+		void updateTlas(AccelerationStructureHandle /*_handle*/, const Memory* /*_mem*/) override
 		{
 		}
 

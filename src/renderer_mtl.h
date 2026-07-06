@@ -302,18 +302,23 @@ namespace bgfx { namespace mtl
 			: m_accelerationStructure(NULL)
 			, m_scratchBuffer(NULL)
 			, m_instanceBuffer(NULL)
-			, m_blas(NULL)
+			, m_numInstances(0)
 		{
 		}
 
 		void createBlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const BufferMtl& _vertexBuffer, uint32_t _vertexStride, uint32_t _numVertices, const BufferMtl& _indexBuffer, bool _index32, uint32_t _numTriangles);
-		void createTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const AccelerationStructureMtl& _blas);
+		void createTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, MTL::AccelerationStructure* const* _blases, uint16_t _num);
+		void updateTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const float* _transforms); // m_numInstances 4x4 bx matrices
 		void destroy();
+
+		void buildTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, bool _create);
 
 		MTL::AccelerationStructure* m_accelerationStructure;
 		MTL::Buffer*                m_scratchBuffer;
 		MTL::Buffer*                m_instanceBuffer;
-		MTL::AccelerationStructure* m_blas; // for a TLAS: the referenced BLAS (residency)
+		// For a TLAS: the referenced BLASes (need explicit residency when bound).
+		MTL::AccelerationStructure* m_blasList[BGFX_CONFIG_MAX_TLAS_INSTANCES];
+		uint16_t                    m_numInstances;
 	};
 
 	struct ShaderMtl

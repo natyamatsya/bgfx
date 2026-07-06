@@ -2867,12 +2867,20 @@ VK_IMPORT_DEVICE
 				);
 		}
 
-		void createTlas(AccelerationStructureHandle _handle, AccelerationStructureHandle _blas) override
+		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
 		{
-			m_accelerationStructures[_handle.idx].createTlas(
-				  m_commandBuffer
-				, m_accelerationStructures[_blas.idx].m_deviceAddress
-				);
+			VkDeviceAddress blasAddresses[BGFX_CONFIG_MAX_TLAS_INSTANCES];
+			for (uint16_t ii = 0; ii < _num; ++ii)
+			{
+				blasAddresses[ii] = m_accelerationStructures[_blases[ii].idx].m_deviceAddress;
+			}
+
+			m_accelerationStructures[_handle.idx].createTlas(m_commandBuffer, blasAddresses, _num);
+		}
+
+		void updateTlas(AccelerationStructureHandle _handle, const Memory* _mem) override
+		{
+			m_accelerationStructures[_handle.idx].updateTlas(m_commandBuffer, (const float*)_mem->data);
 		}
 
 		void destroyAccelerationStructure(AccelerationStructureHandle _handle) override
@@ -5959,27 +5967,64 @@ VK_DESTROY
 		m_deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(device, &adai);
 	}
 
-	void AccelerationStructureVK::createTlas(VkCommandBuffer _commandBuffer, VkDeviceAddress _blasAddress)
+	void AccelerationStructureVK::createTlas(VkCommandBuffer _commandBuffer, const VkDeviceAddress* _blasAddresses, uint16_t _num)
 	{
 		const VkDevice device = s_renderVK->m_device;
 
-		// One instance of the bottom-level AS at identity transform.
-		VkAccelerationStructureInstanceKHR instance;
-		bx::memSet(&instance, 0, sizeof(instance) );
-		instance.transform.matrix[0][0] = 1.0f;
-		instance.transform.matrix[1][1] = 1.0f;
-		instance.transform.matrix[2][2] = 1.0f;
-		instance.instanceCustomIndex                    = 0;
-		instance.mask                                   = 0xff;
-		instance.instanceShaderBindingTableRecordOffset = 0;
-		instance.flags                                  = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-		instance.accelerationStructureReference         = _blasAddress;
+		m_numInstances = _num;
 
-		createRtBuffer(uint32_t(sizeof(instance) ), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, m_instanceBuffer, m_instanceMem);
+		// One instance per BLAS, identity transforms (see updateTlas).
+		createRtBuffer(uint32_t(_num*sizeof(VkAccelerationStructureInstanceKHR) ), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, m_instanceBuffer, m_instanceMem);
+
 		void* mapped;
-		VK_CHECK(vkMapMemory(device, m_instanceMem, 0, sizeof(instance), 0, &mapped) );
-		bx::memCopy(mapped, &instance, sizeof(instance) );
+		VK_CHECK(vkMapMemory(device, m_instanceMem, 0, _num*sizeof(VkAccelerationStructureInstanceKHR), 0, &mapped) );
+		VkAccelerationStructureInstanceKHR* instances = (VkAccelerationStructureInstanceKHR*)mapped;
+		for (uint16_t ii = 0; ii < _num; ++ii)
+		{
+			VkAccelerationStructureInstanceKHR& instance = instances[ii];
+			bx::memSet(&instance, 0, sizeof(instance) );
+			instance.transform.matrix[0][0] = 1.0f;
+			instance.transform.matrix[1][1] = 1.0f;
+			instance.transform.matrix[2][2] = 1.0f;
+			instance.instanceCustomIndex                    = ii;
+			instance.mask                                   = 0xff;
+			instance.instanceShaderBindingTableRecordOffset = 0;
+			instance.flags                                  = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+			instance.accelerationStructureReference         = _blasAddresses[ii];
+		}
 		vkUnmapMemory(device, m_instanceMem);
+
+		buildTlas(_commandBuffer, true);
+	}
+
+	void AccelerationStructureVK::updateTlas(VkCommandBuffer _commandBuffer, const float* _transforms)
+	{
+		const VkDevice device = s_renderVK->m_device;
+
+		// Rewrite the instance transforms. bx matrices are row-vector 4x4; VK wants a
+		// column-vector 3x4 (VkTransformMatrixKHR), i.e. matrix[i][j] = bx[j*4+i].
+		void* mapped;
+		VK_CHECK(vkMapMemory(device, m_instanceMem, 0, m_numInstances*sizeof(VkAccelerationStructureInstanceKHR), 0, &mapped) );
+		VkAccelerationStructureInstanceKHR* instances = (VkAccelerationStructureInstanceKHR*)mapped;
+		for (uint16_t ii = 0; ii < m_numInstances; ++ii)
+		{
+			const float* mtx = &_transforms[ii*16];
+			for (uint32_t row = 0; row < 3; ++row)
+			{
+				for (uint32_t col = 0; col < 4; ++col)
+				{
+					instances[ii].transform.matrix[row][col] = mtx[col*4 + row];
+				}
+			}
+		}
+		vkUnmapMemory(device, m_instanceMem);
+
+		buildTlas(_commandBuffer, false);
+	}
+
+	void AccelerationStructureVK::buildTlas(VkCommandBuffer _commandBuffer, bool _create)
+	{
+		const VkDevice device = s_renderVK->m_device;
 
 		VkAccelerationStructureGeometryKHR geometry;
 		geometry.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -6004,25 +6049,35 @@ VK_DESTROY
 		buildInfo.ppGeometries  = NULL;
 		buildInfo.scratchData.deviceAddress = 0;
 
-		const uint32_t numInstances = 1;
-		VkAccelerationStructureBuildSizesInfoKHR sizeInfo;
-		sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-		sizeInfo.pNext = NULL;
-		vkGetAccelerationStructureBuildSizesKHR(device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &numInstances, &sizeInfo);
+		const uint32_t numInstances = m_numInstances;
 
-		createRtBuffer(bx::narrowCast<uint32_t>(sizeInfo.accelerationStructureSize), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_buffer, m_mem);
-		createRtBuffer(bx::narrowCast<uint32_t>(sizeInfo.buildScratchSize),          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_scratchBuffer, m_scratchMem);
+		if (_create)
+		{
+			VkAccelerationStructureBuildSizesInfoKHR sizeInfo;
+			sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+			sizeInfo.pNext = NULL;
+			vkGetAccelerationStructureBuildSizesKHR(device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &numInstances, &sizeInfo);
 
-		VkAccelerationStructureCreateInfoKHR asci;
-		asci.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-		asci.pNext         = NULL;
-		asci.createFlags   = 0;
-		asci.buffer        = m_buffer;
-		asci.offset        = 0;
-		asci.size          = sizeInfo.accelerationStructureSize;
-		asci.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-		asci.deviceAddress = 0;
-		VK_CHECK(vkCreateAccelerationStructureKHR(device, &asci, s_renderVK->m_allocatorCb, &m_accelerationStructure) );
+			createRtBuffer(bx::narrowCast<uint32_t>(sizeInfo.accelerationStructureSize), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_buffer, m_mem);
+			createRtBuffer(bx::narrowCast<uint32_t>(sizeInfo.buildScratchSize),          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_scratchBuffer, m_scratchMem);
+
+			VkAccelerationStructureCreateInfoKHR asci;
+			asci.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+			asci.pNext         = NULL;
+			asci.createFlags   = 0;
+			asci.buffer        = m_buffer;
+			asci.offset        = 0;
+			asci.size          = sizeInfo.accelerationStructureSize;
+			asci.type          = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+			asci.deviceAddress = 0;
+			VK_CHECK(vkCreateAccelerationStructureKHR(device, &asci, s_renderVK->m_allocatorCb, &m_accelerationStructure) );
+
+			VkAccelerationStructureDeviceAddressInfoKHR adai;
+			adai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+			adai.pNext = NULL;
+			adai.accelerationStructure = m_accelerationStructure;
+			m_deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(device, &adai);
+		}
 
 		buildInfo.dstAccelerationStructure  = m_accelerationStructure;
 		buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_scratchBuffer);
@@ -6036,12 +6091,6 @@ VK_DESTROY
 
 		vkCmdBuildAccelerationStructuresKHR(_commandBuffer, 1, &buildInfo, ranges);
 		setMemoryBarrier(_commandBuffer, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-
-		VkAccelerationStructureDeviceAddressInfoKHR adai;
-		adai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-		adai.pNext = NULL;
-		adai.accelerationStructure = m_accelerationStructure;
-		m_deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(device, &adai);
 	}
 
 	void AccelerationStructureVK::destroy()
