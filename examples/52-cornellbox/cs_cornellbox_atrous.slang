@@ -84,6 +84,10 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 			int2 tap = center + int2(xx, yy)*step;
 			if (tap.x < 0 || tap.y < 0 || tap.x >= res.x || tap.y >= res.y) continue;
 
+			// Emissive/background pixels carry no irradiance -- they are composited from
+			// the G-buffer after filtering; do not let their zeros dilute neighbours.
+			if (s_gbufA[tap].a > 0.5 && !(xx == 0 && yy == 0) ) continue;
+
 			const float4 gbP = s_gbufN[tap];
 			const float3 nP  = gbP.xyz;
 			const float  tP  = gbP.w;
@@ -108,9 +112,12 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 
 	if (u_filterParams.y > 0.5)
 	{
-		// Final pass: re-modulate the primary-hit albedo and tonemap for display.
-		const float3 albedo = s_gbufA[center].rgb;
-		imageStore(s_target, ivec2(center), float4(tonemap(filtered * albedo), 1.0) );
+		// Final pass: re-modulate the primary-hit albedo and tonemap for display --
+		// except emissive/background pixels, whose radiance is composited directly from
+		// the G-buffer (it never entered the filtered signal).
+		const float4 gbA = s_gbufA[center];
+		const float3 color = gbA.a > 0.5 ? gbA.rgb : filtered * gbA.rgb;
+		imageStore(s_target, ivec2(center), float4(tonemap(color), 1.0) );
 	}
 	else
 	{
