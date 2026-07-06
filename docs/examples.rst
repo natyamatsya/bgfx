@@ -724,3 +724,15 @@ https://sluglibrary.com/
 
 .. figure:: https://github.com/bkaradzic/bgfx/raw/master/examples/51-gpufont/screenshot.png
    :alt: example-51-gpufont
+
+`52-cornellbox <https://github.com/bkaradzic/bgfx/tree/master/examples/52-cornellbox>`__
+----------------------------------------------------------------------------------------
+
+Cornell Box path traced in a Slang shader, in four selectable render stages: simple ray
+tracing (direct lighting), progressive path tracing, path tracing with an SVGF denoiser
+(temporal reprojection + variance-guided a-trous filtering), and ReSTIR DI. Uses hardware
+ray query through the bgfx acceleration-structure API when ``BGFX_CAPS_RAY_TRACING`` is
+present, with an analytic compute fallback otherwise.
+
+.. figure:: https://github.com/bkaradzic/bgfx/raw/master/examples/52-cornellbox/screenshot.png
+   :alt: example-52-cornellbox

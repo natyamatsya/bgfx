@@ -200,10 +200,11 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim, bool us
 {
 	float3 radiance   = float3(0, 0, 0);
 	float3 throughput = float3(1, 1, 1);
-	prim.albedo = float3(1, 1, 1);
-	prim.normal = float3(0, 0, 0);
-	prim.t      = 0.0;
-	prim.inst   = 0;
+	prim.albedo   = float3(1, 1, 1);
+	prim.emission = float3(0, 0, 0);
+	prim.normal   = float3(0, 0, 0);
+	prim.t        = 0.0;
+	prim.inst     = 0;
 
 	const int maxBounces = clamp(int(u_ptParams.y), 1, 8);
 	for (int bounce = 0; bounce < maxBounces; ++bounce)
@@ -212,7 +213,11 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim, bool us
 		int matIdx = traceClosest(ro, rd, 1e30, t);
 		if (matIdx < 0)
 		{
-			if (bounce == 0) radiance = float3(0.02, 0.02, 0.02); // open front: background
+			if (bounce == 0)
+			{
+				radiance = float3(0.02, 0.02, 0.02); // open front: background
+				prim.emission = radiance;
+			}
 			break;
 		}
 
@@ -221,7 +226,11 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim, bool us
 		if (dot(emission, emission) > 0.0)
 		{
 			// Direct light hits only; indirect lighting is handled by NEE below.
-			if (bounce == 0) radiance += throughput * emission;
+			if (bounce == 0)
+			{
+				radiance += throughput * emission;
+				prim.emission = emission;
+			}
 			break;
 		}
 
@@ -295,7 +304,10 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 	float3 sampleSum = float3(0, 0, 0);
 	for (int s = 0; s < spp; ++s)
 	{
-		float2 jitter = float2(rnd(rng), rnd(rng) );
+		// Sample 0 uses the pixel centre: it supplies the G-buffer and the emitter
+		// visibility, which must be deterministic per pixel or the emitter's edges crawl
+		// with the jitter. The remaining samples are jittered as usual.
+		float2 jitter = s == 0 ? float2(0.5, 0.5) : float2(rnd(rng), rnd(rng) );
 		float3 rd = primaryRay(float2(dtid.xy), jitter, res);
 		Primary p;
 		sampleSum += pathTrace(kEye, rd, rng, p, useRestir && s == 0, int2(dtid.xy) );
@@ -316,8 +328,15 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 	// Mode 2: write the G-buffer and THIS FRAME's albedo-demodulated irradiance (plus the
 	// instance id for reprojection); the temporal pass owns the accumulation, the a-trous
 	// passes filter it, and the final pass produces the display image.
-	float3 fresh = (sampleSum / float(spp)) / max(prim.albedo, float3(1e-3, 1e-3, 1e-3) );
-	s_gbufA[int2(dtid.xy)] = float4(prim.albedo, 1.0);
+	// Directly-visible emission (the light itself, and the background) is NOT part of the
+	// denoised signal: its raw radiance would dominate the variance at the emitter's edges
+	// and make the filter smear it. It is stored in the G-buffer (flagged in gbufA.a) and
+	// composited after filtering by the final a-trous pass.
+	const bool passthrough = dot(prim.emission, prim.emission) > 0.0;
+	float3 fresh = passthrough
+		? float3(0, 0, 0)
+		: (sampleSum / float(spp)) / max(prim.albedo, float3(1e-3, 1e-3, 1e-3) );
+	s_gbufA[int2(dtid.xy)] = passthrough ? float4(prim.emission, 1.0) : float4(prim.albedo, 0.0);
 	s_gbufN[int2(dtid.xy)] = float4(prim.normal, prim.t);
 	s_irr[int2(dtid.xy)]   = float4(fresh, float(prim.inst) );
 }
