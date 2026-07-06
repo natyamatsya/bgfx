@@ -4,8 +4,9 @@
 > runtime exists end-to-end: public API (`createBlas`/`createTlas`/`setAccelerationStructure`),
 > Vulkan + Metal backends, and the Cornell Box example rendering via hardware ray query with
 > the analytic compute fallback kept for hardware without `BGFX_CAPS_RAY_TRACING`. The Metal
-> path is verified on-device; the Vulkan path compiles end-to-end and awaits validation on a
-> host with `VK_KHR_ray_query` hardware. Written to be idiomatic to bgfx so the work has a
+> path is verified on-device; the Vulkan path is validated end-to-end against Mesa's
+> lavapipe (software `VK_KHR_ray_query`) with cross-backend image agreement vs Metal --
+> see `tools/rt-validation/`. Validation on real RT hardware remains a nice-to-have. Written to be idiomatic to bgfx so the work has a
 > realistic chance of being **upstreamed** (companion to `SLANG_ROADMAP.md`).
 
 ## 1. Goal
@@ -145,16 +146,20 @@ back to the analytic compute shader otherwise.
 
 ### Follow-ups
 
-- Validate the Vulkan path on `VK_KHR_ray_query` hardware.
+- Vulkan path validated via lavapipe (`tools/rt-validation/`, cross-backend image
+  agreement with Metal at mean |delta| 0.12/255); a run on real `VK_KHR_ray_query`
+  hardware remains a nice-to-have for performance and driver-diversity coverage.
 - Path-traced global illumination in the example (colour bleeding).
 - Generalize `createBlas`/`createTlas` (multiple geometries, instance transforms, update/refit).
 - The RT *pipeline* stages (SBT, raygen/hit/miss dispatch) — the larger later workstream.
 
 ## 10. Risks
 
-- **KosmicKrisp (macOS Vulkan) does not expose the RT extensions** (confirmed during the
-  caps work) → the Vulkan RT path cannot be validated on this Mac; needs a discrete-GPU
-  Vulkan host (NVIDIA/AMD) or an RT-capable MoltenVK. **Metal is the locally-verifiable path.**
+- ~~KosmicKrisp (macOS Vulkan) does not expose the RT extensions → the Vulkan RT path
+  cannot be validated on this Mac.~~ Resolved: lavapipe (Mesa software Vulkan, arm64
+  Linux container) implements the full RT extension stack on the CPU and validates the
+  Vulkan backend on this machine — including as a CI-able regression rig
+  (`tools/rt-validation/`).
 - TLAS instance/transform + geometry device-address plumbing is the fiddliest VK part.
 - `Binding` is a fixed 16-byte hashed struct — the new bind type must fit.
 - Metal AS residency (`useResource`) is mandatory and unlike anything in the current bind path.
