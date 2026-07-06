@@ -3,19 +3,26 @@
  * License: https://github.com/bkaradzic/bgfx/blob/master/LICENSE
  */
 
-// Cornell Box ray traced in a Slang shader.
+// Cornell Box path traced in a Slang shader.
 //
 // Two paths, selected at runtime:
-//  - Hardware ray query (BGFX_CAPS_RAY_TRACING): the scene as a triangle mesh with a
-//    BLAS/TLAS built through the bgfx acceleration-structure API, traced by inline ray
-//    query from a compute shader (cs_cornellbox_rq.slang).
-//  - Compute fallback (BGFX_CAPS_COMPUTE only): a self-contained analytic ray tracer
-//    (cs_cornellbox.slang).
-// Both write the same output texture, which a fullscreen quad blits to the screen.
+//  - Hardware ray query (BGFX_CAPS_RAY_TRACING): the scene as three BLASes (walls+light,
+//    tall box, short box) instanced by a TLAS built through the bgfx
+//    acceleration-structure API, traced by inline ray query from a compute shader
+//    (cs_cornellbox_rq.slang). The box instances rotate via bgfx::updateTlas.
+//  - Compute fallback (BGFX_CAPS_COMPUTE only): a self-contained analytic path tracer
+//    (cs_cornellbox.slang) with the same estimator and rotating OBBs.
+// Both are progressive path tracers accumulating into an RGBA32F image; the running
+// average is tonemapped into the display texture, which a fullscreen quad presents.
+// Spacebar toggles the rotation mode (the accumulation restarts every frame while the
+// boxes move -- 1 sample/pixel real time -- and converges again once they stop).
 
 #include "common.h"
 #include "bgfx_utils.h"
 #include "imgui/imgui.h"
+#include "entry/input.h"
+
+#include <bx/math.h>
 
 #include <vector>
 
@@ -23,9 +30,9 @@ namespace
 {
 
 // --- Cornell Box triangle mesh (for the hardware ray-query path) -----------------------
-// The RT path traces a real triangle mesh of the same scene the analytic fallback renders.
-// Each triangle carries a material (albedo / emission / inward normal) in a parallel buffer
-// indexed by primitive index; the shader reads it after a committed hit.
+// The RT path traces real triangle meshes. Each triangle carries a material
+// (albedo / emission / inward normal, in BLAS-local space) in a parallel buffer indexed by
+// instance*12 + primitive; the shader reads it after a committed hit.
 
 struct RtMaterial
 {
@@ -63,7 +70,7 @@ struct RtMesh
 		m_materials.push_back(m);
 	}
 
-	// Axis-aligned box [lo,hi] with outward-facing normals.
+	// Axis-aligned box [lo,hi] with outward-facing normals (6 quads = 12 triangles).
 	void box(const float lo[3], const float hi[3], float r, float g, float bl)
 	{
 		const float x0=lo[0], y0=lo[1], z0=lo[2], x1=hi[0], y1=hi[1], z1=hi[2];
@@ -82,15 +89,14 @@ struct RtMesh
 	}
 };
 
-// Builds the classic Cornell Box: white floor/ceiling/back, red left, green right, an area
-// light on the ceiling, and two boxes -- matching cs_cornellbox.slang.
-static void buildCornellBox(RtMesh& _mesh)
+// Walls of the classic Cornell Box (interior of [-1,1]^3, open front at z=-1) + the area
+// light: 6 quads = 12 triangles, matching cs_cornellbox.slang. Normals point into the room.
+static void buildWalls(RtMesh& _mesh)
 {
 	const float W[3] = { 0.73f, 0.73f, 0.73f };
 	const float R[3] = { 0.65f, 0.05f, 0.05f };
 	const float G[3] = { 0.12f, 0.45f, 0.15f };
 
-	// Walls (interior of [-1,1]^3, open front at z=-1); normals point into the room.
 	{ float a[3]={-1,-1,-1},b[3]={1,-1,-1},c[3]={1,-1,1},d[3]={-1,-1,1}; _mesh.quad(a,b,c,d, 0,1,0,  W[0],W[1],W[2]); } // floor
 	{ float a[3]={-1,1,1},b[3]={1,1,1},c[3]={1,1,-1},d[3]={-1,1,-1};     _mesh.quad(a,b,c,d, 0,-1,0, W[0],W[1],W[2]); } // ceiling
 	{ float a[3]={-1,-1,1},b[3]={1,-1,1},c[3]={1,1,1},d[3]={-1,1,1};     _mesh.quad(a,b,c,d, 0,0,-1, W[0],W[1],W[2]); } // back
@@ -100,11 +106,19 @@ static void buildCornellBox(RtMesh& _mesh)
 	// Area light just below the ceiling.
 	{ float a[3]={-0.35f,0.998f,0.35f},b[3]={0.35f,0.998f,0.35f},c[3]={0.35f,0.998f,-0.35f},d[3]={-0.35f,0.998f,-0.35f};
 	  _mesh.quad(a,b,c,d, 0,-1,0, 0,0,0, 18.0f,18.0f,18.0f); }
-
-	// Two boxes.
-	{ float lo[3]={-0.62f,-1.0f,-0.10f}, hi[3]={-0.12f,0.30f,0.40f}; _mesh.box(lo,hi, W[0],W[1],W[2]); } // tall
-	{ float lo[3]={ 0.10f,-1.0f,-0.55f}, hi[3]={ 0.60f,-0.40f,-0.05f}; _mesh.box(lo,hi, W[0],W[1],W[2]); } // short
 }
+
+// The two boxes are authored in BLAS-local space, centred (in xz) on the origin, so their
+// TLAS instance transforms can rotate them about their own axes. World placement (matching
+// the analytic fallback): tall at (-0.37, 0.15), short at (0.35, -0.30).
+static const float kTallLo[3]  = { -0.25f, -1.0f, -0.25f };
+static const float kTallHi[3]  = {  0.25f,  0.3f,  0.25f };
+static const float kTallCenter[3]  = { -0.37f, 0.0f,  0.15f };
+static const float kShortLo[3] = { -0.25f, -1.0f, -0.25f };
+static const float kShortHi[3] = {  0.25f, -0.4f,  0.25f };
+static const float kShortCenter[3] = {  0.35f, 0.0f, -0.30f };
+
+// --- fullscreen display quad ------------------------------------------------------------
 
 struct PosTexCoord0Vertex
 {
@@ -229,17 +243,22 @@ public:
 			m_csProgram      = bgfx::createProgram(loadShader("cs_cornellbox"), true);
 			m_displayProgram = loadProgram("vs_cornellbox", "fs_cornellbox");
 			s_texColor       = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
+			u_params         = bgfx::createUniform("u_params", bgfx::UniformType::Vec4);
 			m_outputTex.idx  = bgfx::kInvalidHandle;
-			createOutputTexture(m_width, m_height);
+			m_accumTex.idx   = bgfx::kInvalidHandle;
+			createOutputTextures(m_width, m_height);
 		}
 
-		// Hardware ray-query path: build a triangle mesh + per-triangle materials of the same
-		// scene, a BLAS/TLAS over it, and the ray-query compute program. Falls back to the
-		// analytic compute shader above when BGFX_CAPS_RAY_TRACING is absent.
+		// Hardware ray-query path: three BLASes (walls+light, tall box, short box) with the
+		// boxes in local space so their TLAS instances can rotate; per-triangle materials in
+		// one buffer ordered [walls | tall | short] (12 triangles each). Falls back to the
+		// analytic path tracer above when BGFX_CAPS_RAY_TRACING is absent.
 		if (m_rtSupported)
 		{
-			RtMesh mesh;
-			buildCornellBox(mesh);
+			RtMesh walls, tall, shrt;
+			buildWalls(walls);
+			tall.box(kTallLo,  kTallHi,  0.73f, 0.73f, 0.73f);
+			shrt.box(kShortLo, kShortHi, 0.73f, 0.73f, 0.73f);
 
 			bgfx::VertexLayout posLayout;
 			posLayout.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).end();
@@ -251,25 +270,35 @@ public:
 				.add(bgfx::Attrib::TexCoord2, 4, bgfx::AttribType::Float)
 				.end();
 
-			m_vbh = bgfx::createVertexBuffer(
-				  bgfx::copy(mesh.m_positions.data(), uint32_t(mesh.m_positions.size()*sizeof(float) ) )
-				, posLayout
-				);
-			m_ibh = bgfx::createIndexBuffer(
-				  bgfx::copy(mesh.m_indices.data(), uint32_t(mesh.m_indices.size()*sizeof(uint16_t) ) )
-				);
+			const RtMesh* meshes[kNumBlas] = { &walls, &tall, &shrt };
+			std::vector<RtMaterial> materials;
+			for (uint32_t ii = 0; ii < kNumBlas; ++ii)
+			{
+				const RtMesh& mesh = *meshes[ii];
+				m_vbh[ii] = bgfx::createVertexBuffer(
+					  bgfx::copy(mesh.m_positions.data(), uint32_t(mesh.m_positions.size()*sizeof(float) ) )
+					, posLayout
+					);
+				m_ibh[ii] = bgfx::createIndexBuffer(
+					  bgfx::copy(mesh.m_indices.data(), uint32_t(mesh.m_indices.size()*sizeof(uint16_t) ) )
+					);
+				m_blas[ii] = bgfx::createBlas(m_vbh[ii], m_ibh[ii]);
+				materials.insert(materials.end(), mesh.m_materials.begin(), mesh.m_materials.end() );
+			}
+
 			m_materialBuf = bgfx::createVertexBuffer(
-				  bgfx::copy(mesh.m_materials.data(), uint32_t(mesh.m_materials.size()*sizeof(RtMaterial) ) )
+				  bgfx::copy(materials.data(), uint32_t(materials.size()*sizeof(RtMaterial) ) )
 				, matLayout
 				, BGFX_BUFFER_COMPUTE_READ
 				);
 
-			m_blas = bgfx::createBlas(m_vbh, m_ibh);
-			m_tlas = bgfx::createTlas(&m_blas, 1);
+			m_tlas = bgfx::createTlas(m_blas, kNumBlas);
+			updateTlasTransforms(); // place the boxes (angle 0)
 
 			m_rqProgram = bgfx::createProgram(loadShader("cs_cornellbox_rq"), true);
 		}
 
+		m_timeOffset = bx::getHPCounter();
 		imguiCreate();
 	}
 
@@ -280,16 +309,21 @@ public:
 		if (m_rtSupported)
 		{
 			if (bgfx::isValid(m_tlas) )        bgfx::destroy(m_tlas);
-			if (bgfx::isValid(m_blas) )        bgfx::destroy(m_blas);
+			for (uint32_t ii = 0; ii < kNumBlas; ++ii)
+			{
+				if (bgfx::isValid(m_blas[ii]) ) bgfx::destroy(m_blas[ii]);
+				if (bgfx::isValid(m_ibh[ii]) )  bgfx::destroy(m_ibh[ii]);
+				if (bgfx::isValid(m_vbh[ii]) )  bgfx::destroy(m_vbh[ii]);
+			}
 			if (bgfx::isValid(m_materialBuf) ) bgfx::destroy(m_materialBuf);
-			if (bgfx::isValid(m_ibh) )         bgfx::destroy(m_ibh);
-			if (bgfx::isValid(m_vbh) )         bgfx::destroy(m_vbh);
 			if (bgfx::isValid(m_rqProgram) )   bgfx::destroy(m_rqProgram);
 		}
 
 		if (m_computeSupported)
 		{
+			if (bgfx::isValid(m_accumTex) )       bgfx::destroy(m_accumTex);
 			if (bgfx::isValid(m_outputTex) )      bgfx::destroy(m_outputTex);
+			if (bgfx::isValid(u_params) )         bgfx::destroy(u_params);
 			if (bgfx::isValid(s_texColor) )       bgfx::destroy(s_texColor);
 			if (bgfx::isValid(m_displayProgram) ) bgfx::destroy(m_displayProgram);
 			if (bgfx::isValid(m_csProgram) )      bgfx::destroy(m_csProgram);
@@ -300,11 +334,16 @@ public:
 		return 0;
 	}
 
-	void createOutputTexture(uint32_t _width, uint32_t _height)
+	void createOutputTextures(uint32_t _width, uint32_t _height)
 	{
 		if (bgfx::isValid(m_outputTex) )
 		{
 			bgfx::destroy(m_outputTex);
+		}
+
+		if (bgfx::isValid(m_accumTex) )
+		{
+			bgfx::destroy(m_accumTex);
 		}
 
 		m_texWidth  = _width;
@@ -321,6 +360,36 @@ public:
 			| BGFX_SAMPLER_U_CLAMP
 			| BGFX_SAMPLER_V_CLAMP
 			);
+		m_accumTex = bgfx::createTexture2D(
+			  uint16_t(_width)
+			, uint16_t(_height)
+			, false
+			, 1
+			, bgfx::TextureFormat::RGBA32F
+			, BGFX_TEXTURE_COMPUTE_WRITE
+			);
+
+		m_resetAccum = true;
+	}
+
+	// Instance transforms in createTlas order: walls (identity), tall box (+angle), short
+	// box (-angle). bx matrices; each box rotates about its own axis, then translates to
+	// its world centre.
+	void updateTlasTransforms()
+	{
+		float xf[kNumBlas*16];
+		bx::mtxIdentity(&xf[0]);
+
+		float rot[16], trn[16];
+		bx::mtxRotateY(rot, m_angle);
+		bx::mtxTranslate(trn, kTallCenter[0], kTallCenter[1], kTallCenter[2]);
+		bx::mtxMul(&xf[16], rot, trn);
+
+		bx::mtxRotateY(rot, -m_angle);
+		bx::mtxTranslate(trn, kShortCenter[0], kShortCenter[1], kShortCenter[2]);
+		bx::mtxMul(&xf[32], rot, trn);
+
+		bgfx::updateTlas(m_tlas, bgfx::copy(xf, sizeof(xf) ) );
 	}
 
 	bool update() override
@@ -329,6 +398,15 @@ public:
 		{
 			return false;
 		}
+
+		// Spacebar toggles the rotation mode (edge-triggered).
+		const bool spaceDown = inputGetKeyState(entry::Key::Space);
+		if (spaceDown && !m_spaceWasDown)
+		{
+			m_rotate = !m_rotate;
+			m_resetAccum = true;
+		}
+		m_spaceWasDown = spaceDown;
 
 		imguiBeginFrame(m_mouseState.m_mx, m_mouseState.m_my
 			, (m_mouseState.m_buttons[entry::MouseButton::Left]   ? IMGUI_MBUT_LEFT   : 0)
@@ -339,12 +417,16 @@ public:
 
 		showExampleDialog(this);
 
-		ImGui::SetNextWindowPos(ImVec2(m_width - 260.0f, 40.0f), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowPos(ImVec2(m_width - 280.0f, 40.0f), ImGuiCond_FirstUseEver);
 		ImGui::Begin("Cornell Box (Slang)");
 		ImGui::TextWrapped(m_rtSupported
 			? "Path: hardware ray query (BLAS/TLAS, BGFX_CAPS_RAY_TRACING)."
-			: "Path: compute fallback (analytic ray tracer; no hardware RT)."
+			: "Path: compute fallback (analytic path tracer; no hardware RT)."
 			);
+		if (ImGui::Checkbox("Rotate boxes (Space)", &m_rotate) )
+		{
+			m_resetAccum = true;
+		}
 		ImGui::End();
 
 		imguiEndFrame();
@@ -353,25 +435,50 @@ public:
 		{
 			if (m_texWidth != m_width || m_texHeight != m_height)
 			{
-				createOutputTexture(m_width, m_height);
+				createOutputTextures(m_width, m_height);
 			}
 
 			const bgfx::Caps* caps = bgfx::getCaps();
 
-			// Ray trace into the output image: hardware ray query when available, else the
-			// analytic compute fallback. Both write the same m_outputTex.
+			// Advance the boxes; while they move, every frame is a fresh 1-sample/pixel
+			// image (the accumulation restarts), converging again once they stop.
+			const int64_t now = bx::getHPCounter();
+			const float dt = float(double(now - m_lastFrameTime) / double(bx::getHPFrequency() ) );
+			m_lastFrameTime = now;
+
+			if (m_rotate)
+			{
+				m_angle += dt * 0.7f;
+				m_resetAccum = true;
+
+				if (m_rtSupported)
+				{
+					updateTlasTransforms();
+				}
+			}
+
+			const float params[4] = { float(m_frameIdx), m_resetAccum ? 1.0f : 0.0f, m_angle, 0.0f };
+			bgfx::setUniform(u_params, params);
+
+			// Path trace into the accumulation image; the shader writes the tonemapped
+			// running average to the display image.
 			if (m_rtSupported)
 			{
-				bgfx::setAccelerationStructure(0, m_tlas);                                    // scene    (stage 0)
-				bgfx::setImage(1, m_outputTex, 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA8); // s_target (stage 1)
-				bgfx::setBuffer(2, m_materialBuf, bgfx::Access::Read);                         // materials (stage 2)
+				bgfx::setAccelerationStructure(0, m_tlas);                                          // scene     (stage 0)
+				bgfx::setImage(1, m_accumTex,  0, bgfx::Access::ReadWrite, bgfx::TextureFormat::RGBA32F); // s_accum  (stage 1)
+				bgfx::setImage(2, m_outputTex, 0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA8);   // s_target (stage 2)
+				bgfx::setBuffer(3, m_materialBuf, bgfx::Access::Read);                              // materials (stage 3)
 				bgfx::dispatch(kViewCompute, m_rqProgram, (m_width + 7)/8, (m_height + 7)/8, 1);
 			}
 			else
 			{
-				bgfx::setImage(0, m_outputTex, 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);
+				bgfx::setImage(0, m_accumTex,  0, bgfx::Access::ReadWrite, bgfx::TextureFormat::RGBA32F); // s_accum  (stage 0)
+				bgfx::setImage(1, m_outputTex, 0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA8);   // s_target (stage 1)
 				bgfx::dispatch(kViewCompute, m_csProgram, (m_width + 7)/8, (m_height + 7)/8, 1);
 			}
+
+			m_resetAccum = false;
+			++m_frameIdx;
 
 			// Blit the image to the backbuffer with a fullscreen quad.
 			float ortho[16];
@@ -397,6 +504,7 @@ public:
 
 	static constexpr bgfx::ViewId kViewCompute = 0;
 	static constexpr bgfx::ViewId kViewDisplay = 1;
+	static constexpr uint32_t     kNumBlas     = 3; // walls+light, tall box, short box
 
 	entry::MouseState m_mouseState;
 
@@ -411,18 +519,28 @@ public:
 	bool m_computeSupported = false;
 	bool m_rtSupported      = false;
 
+	bool     m_rotate       = false;
+	bool     m_spaceWasDown = false;
+	bool     m_resetAccum   = true;
+	float    m_angle        = 0.0f;
+	uint32_t m_frameIdx     = 0;
+	int64_t  m_timeOffset   = 0;
+	int64_t  m_lastFrameTime = 0;
+
 	bgfx::ProgramHandle m_csProgram      = BGFX_INVALID_HANDLE;
 	bgfx::ProgramHandle m_rqProgram      = BGFX_INVALID_HANDLE;
 	bgfx::ProgramHandle m_displayProgram = BGFX_INVALID_HANDLE;
 	bgfx::TextureHandle m_outputTex      = BGFX_INVALID_HANDLE;
+	bgfx::TextureHandle m_accumTex       = BGFX_INVALID_HANDLE;
 	bgfx::UniformHandle s_texColor       = BGFX_INVALID_HANDLE;
+	bgfx::UniformHandle u_params         = BGFX_INVALID_HANDLE;
 
 	// Ray-query path resources.
-	bgfx::VertexBufferHandle          m_vbh          = BGFX_INVALID_HANDLE;
-	bgfx::IndexBufferHandle           m_ibh          = BGFX_INVALID_HANDLE;
-	bgfx::VertexBufferHandle          m_materialBuf  = BGFX_INVALID_HANDLE;
-	bgfx::AccelerationStructureHandle m_blas         = BGFX_INVALID_HANDLE;
-	bgfx::AccelerationStructureHandle m_tlas         = BGFX_INVALID_HANDLE;
+	bgfx::VertexBufferHandle          m_vbh[kNumBlas]  = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+	bgfx::IndexBufferHandle           m_ibh[kNumBlas]  = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+	bgfx::VertexBufferHandle          m_materialBuf    = BGFX_INVALID_HANDLE;
+	bgfx::AccelerationStructureHandle m_blas[kNumBlas] = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+	bgfx::AccelerationStructureHandle m_tlas           = BGFX_INVALID_HANDLE;
 };
 
 } // namespace
@@ -430,6 +548,6 @@ public:
 ENTRY_IMPLEMENT_MAIN(
 	  ExampleCornellBox
 	, "52-cornellbox"
-	, "Cornell Box ray traced in a Slang compute shader (compute fallback)."
+	, "Cornell Box path traced in a Slang shader (ray query + compute fallback)."
 	, "https://bkaradzic.github.io/bgfx/examples.html#cornellbox"
 	);
