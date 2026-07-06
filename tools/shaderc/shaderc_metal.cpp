@@ -736,6 +736,25 @@ namespace bgfx { namespace metal
 		const spv::ExecutionModel executionModel = msl.get_execution_model();
 		spirv_cross::ShaderResources resources = msl.get_shader_resources();
 
+		// The Metal runtime matches vertex attributes BY NAME (a_position, a_texcoord0, ...)
+		// via function reflection. Slang entry-point parameters prefix the flattened stage
+		// inputs (e.g. "input_a_position"), which breaks that lookup and fails pipeline
+		// creation ("Vertex attribute ... missing from the vertex descriptor"). Strip
+		// everything before the bgfx attribute name.
+		if (spv::ExecutionModelVertex == executionModel)
+		{
+			for (auto& resource : resources.stage_inputs)
+			{
+				const std::string name = msl.get_name(resource.id);
+				const size_t pos = name.find("a_");
+				if (std::string::npos != pos
+				&&  0 != pos)
+				{
+					msl.set_name(resource.id, name.substr(pos) );
+				}
+			}
+		}
+
 		// Undo bgfx's canonical SPIR-V binding shifts to recover the MSL resource index:
 		// UBO -> Metal buffer 0 (named "_mtl_u"); storage buffer N -> buffer N+1;
 		// texture/image N -> texture N; sampler N -> sampler N. This mirrors the
