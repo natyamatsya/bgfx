@@ -265,7 +265,7 @@ public:
 				);
 
 			m_blas = bgfx::createBlas(m_vbh, m_ibh);
-			m_tlas = bgfx::createTlas(m_blas);
+			m_tlas = bgfx::createTlas(&m_blas, 1);
 
 			m_rqProgram = bgfx::createProgram(loadShader("cs_cornellbox_rq"), true);
 		}
