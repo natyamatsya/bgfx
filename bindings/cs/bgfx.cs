@@ -1201,6 +1201,11 @@ public static partial class bgfx
 		RayTracing             = 0x0000000800000000,
 	
 		/// <summary>
+		/// Ray tracing pipelines (raygen/miss/hit shaders) are supported.
+		/// </summary>
+		RayTracingPipeline     = 0x0000001000000000,
+	
+		/// <summary>
 		/// All texture compare modes are supported.
 		/// </summary>
 		TextureCompareAll      = 0x0000000000180000,
@@ -3403,15 +3408,30 @@ public static partial class bgfx
 	public static extern unsafe void destroy_vertex_layout(VertexLayoutHandle _layoutHandle);
 	
 	/// <summary>
-	/// Create a bottom-level acceleration structure (BLAS) from triangle geometry.
+	/// Create a bottom-level acceleration structure (BLAS) from one or more triangle
+	/// geometries. Built refit-capable: after the contents of the vertex buffers change
+	/// (e.g. deformed by a compute shader via `BGFX_BUFFER_COMPUTE_WRITE`), call `updateBlas`.
 	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
 	/// </summary>
 	///
-	/// <param name="_vertexBuffer">Vertex buffer with the geometry positions.</param>
-	/// <param name="_indexBuffer">Index buffer describing the triangles.</param>
+	/// <param name="_vertexBuffers">Vertex buffers with the geometry positions, one per geometry.</param>
+	/// <param name="_indexBuffers">Index buffers describing the triangles, one per geometry.</param>
+	/// <param name="_num">Number of geometries.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_create_blas", CallingConvention = CallingConvention.Cdecl)]
-	public static extern unsafe AccelerationStructureHandle create_blas(VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer);
+	public static extern unsafe AccelerationStructureHandle create_blas(VertexBufferHandle* _vertexBuffers, IndexBufferHandle* _indexBuffers, ushort _num);
+	
+	/// <summary>
+	/// Refit a bottom-level acceleration structure after its source vertex buffers changed.
+	/// Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
+	/// referencing this BLAS should be updated afterwards (see `updateTlas`).
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	/// </summary>
+	///
+	/// <param name="_handle">Bottom-level acceleration structure handle.</param>
+	///
+	[DllImport(DllName, EntryPoint="bgfx_update_blas", CallingConvention = CallingConvention.Cdecl)]
+	public static extern unsafe void update_blas(AccelerationStructureHandle _handle);
 	
 	/// <summary>
 	/// Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
@@ -3437,6 +3457,21 @@ public static partial class bgfx
 	///
 	[DllImport(DllName, EntryPoint="bgfx_update_tlas", CallingConvention = CallingConvention.Cdecl)]
 	public static extern unsafe void update_tlas(AccelerationStructureHandle _handle, Memory* _mem);
+	
+	/// <summary>
+	/// Create a ray-tracing pipeline program from a ray-generation, a miss, and a (triangle)
+	/// closest-hit shader. Dispatch with `dispatch`; for a ray-tracing program the dispatch
+	/// dimensions are the ray-grid size in RAYS (not workgroups).
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING_PIPELINE`.
+	/// </summary>
+	///
+	/// <param name="_rayGen">Ray-generation shader.</param>
+	/// <param name="_miss">Miss shader.</param>
+	/// <param name="_closestHit">Closest-hit shader (triangle hit group).</param>
+	/// <param name="_destroyShaders">If true, shaders will be destroyed when program is destroyed.</param>
+	///
+	[DllImport(DllName, EntryPoint="bgfx_create_rt_program", CallingConvention = CallingConvention.Cdecl)]
+	public static extern unsafe ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit, bool _destroyShaders);
 	
 	/// <summary>
 	/// Destroy acceleration structure.

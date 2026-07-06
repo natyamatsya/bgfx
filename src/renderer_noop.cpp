@@ -125,7 +125,15 @@ namespace bgfx { namespace noop
 		{
 		}
 
-		void createBlas(AccelerationStructureHandle /*_handle*/, VertexBufferHandle /*_vertexBuffer*/, IndexBufferHandle /*_indexBuffer*/) override
+		void createBlas(AccelerationStructureHandle /*_handle*/, const VertexBufferHandle* /*_vertexBuffers*/, const IndexBufferHandle* /*_indexBuffers*/, uint16_t /*_num*/) override
+		{
+		}
+
+		void updateBlas(AccelerationStructureHandle /*_handle*/) override
+		{
+		}
+
+		void createRtProgram(ProgramHandle /*_handle*/, ShaderHandle /*_rayGen*/, ShaderHandle /*_miss*/, ShaderHandle /*_closestHit*/) override
 		{
 		}
 

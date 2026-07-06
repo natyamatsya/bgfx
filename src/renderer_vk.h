@@ -254,6 +254,10 @@
 			VK_IMPORT_DEVICE_FUNC(true, vkGetAccelerationStructureBuildSizesKHR);     \
 			VK_IMPORT_DEVICE_FUNC(true, vkCmdBuildAccelerationStructuresKHR);         \
 			VK_IMPORT_DEVICE_FUNC(true, vkGetAccelerationStructureDeviceAddressKHR);  \
+			/* VK_KHR_ray_tracing_pipeline */                                         \
+			VK_IMPORT_DEVICE_FUNC(true, vkCreateRayTracingPipelinesKHR);              \
+			VK_IMPORT_DEVICE_FUNC(true, vkGetRayTracingShaderGroupHandlesKHR);        \
+			VK_IMPORT_DEVICE_FUNC(true, vkCmdTraceRaysKHR);                           \
 
 #define VK_DESTROY                                \
 			VK_DESTROY_FUNC(Buffer);              \
@@ -532,12 +536,28 @@ VK_DESTROY_FUNC(DescriptorSet);
 		{
 		}
 
-		void createBlas(VkCommandBuffer _commandBuffer, VkDeviceAddress _vertexAddress, uint32_t _vertexStride, uint32_t _numVertices, VkDeviceAddress _indexAddress, VkIndexType _indexType, uint32_t _numTriangles);
+		// One triangle geometry of a BLAS (kept so updateBlas can refit).
+		struct Geometry
+		{
+			VkDeviceAddress m_vertexAddress;
+			VkDeviceAddress m_indexAddress;
+			uint32_t    m_vertexStride;
+			uint32_t    m_numVertices;
+			uint32_t    m_numTriangles;
+			VkIndexType m_indexType;
+		};
+
+		void createBlas(VkCommandBuffer _commandBuffer, const Geometry* _geometries, uint16_t _num);
+		void updateBlas(VkCommandBuffer _commandBuffer); // refit after the vertex data changed
 		void createTlas(VkCommandBuffer _commandBuffer, const VkDeviceAddress* _blasAddresses, uint16_t _num);
 		void updateTlas(VkCommandBuffer _commandBuffer, const float* _transforms); // m_numInstances 4x4 bx matrices
 		void destroy();
 
+		void buildBlas(VkCommandBuffer _commandBuffer, bool _create);
 		void buildTlas(VkCommandBuffer _commandBuffer, bool _create);
+
+		Geometry m_geometries[BGFX_CONFIG_MAX_BLAS_GEOMETRIES]; // BLAS only
+		uint16_t m_numGeometries = 0;
 
 		VkBuffer m_buffer;         // acceleration-structure storage
 		VkBuffer m_scratchBuffer;  // build scratch (kept until destroy)
@@ -632,10 +652,23 @@ VK_DESTROY_FUNC(DescriptorSet);
 		}
 
 		void create(const ShaderVK* _vsh, const ShaderVK* _fsh);
+		void createRt(const ShaderVK* _rayGen, const ShaderVK* _miss, const ShaderVK* _closestHit);
+
+		bool isRayTracing() const { return NULL != m_missSh; }
 		void destroy();
 
 		const ShaderVK* m_vsh;
 		const ShaderVK* m_fsh;
+		// Ray-tracing programs only (m_vsh = raygen): the miss + closest-hit stages and
+		// the shader binding table built at pipeline creation.
+		const ShaderVK* m_missSh = NULL;
+		const ShaderVK* m_chitSh = NULL;
+		VkBuffer        m_sbtBuffer = VK_NULL_HANDLE;
+		VkDeviceMemory  m_sbtMem = VK_NULL_HANDLE;
+		VkStridedDeviceAddressRegionKHR m_sbtRayGen = {};
+		VkStridedDeviceAddressRegionKHR m_sbtMiss = {};
+		VkStridedDeviceAddressRegionKHR m_sbtHit = {};
+		VkStridedDeviceAddressRegionKHR m_sbtCallable = {};
 
 		BindInfo m_bindInfo[BGFX_CONFIG_MAX_TEXTURE_SAMPLERS];
 
