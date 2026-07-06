@@ -337,7 +337,7 @@ public:
 
 		if (m_computeSupported)
 		{
-			for (bgfx::TextureHandle tex : { m_accumTex, m_gbufA, m_gbufN, m_irr[0], m_irr[1], m_histIrr[0], m_histIrr[1], m_histN[0], m_histN[1], m_histM[0], m_histM[1], m_outputTex })
+			for (bgfx::TextureHandle tex : { m_accumTex, m_gbufA, m_gbufN, m_irr[0], m_irr[1], m_histIrr[0], m_histIrr[1], m_histN[0], m_histN[1], m_histM[0], m_histM[1], m_reservoir[0], m_reservoir[1], m_outputTex })
 			{
 				if (bgfx::isValid(tex) ) bgfx::destroy(tex);
 			}
@@ -359,7 +359,7 @@ public:
 
 	void createOutputTextures(uint32_t _width, uint32_t _height)
 	{
-		bgfx::TextureHandle* textures[] = { &m_outputTex, &m_accumTex, &m_gbufA, &m_gbufN, &m_irr[0], &m_irr[1], &m_histIrr[0], &m_histIrr[1], &m_histN[0], &m_histN[1], &m_histM[0], &m_histM[1] };
+		bgfx::TextureHandle* textures[] = { &m_outputTex, &m_accumTex, &m_gbufA, &m_gbufN, &m_irr[0], &m_irr[1], &m_histIrr[0], &m_histIrr[1], &m_histN[0], &m_histN[1], &m_histM[0], &m_histM[1], &m_reservoir[0], &m_reservoir[1] };
 		for (bgfx::TextureHandle* tex : textures)
 		{
 			if (bgfx::isValid(*tex) )
@@ -385,7 +385,7 @@ public:
 
 		// Accumulation, G-buffer (albedo, normal+depth), and the a-trous ping-pong
 		// irradiance images.
-		for (bgfx::TextureHandle* tex : { &m_accumTex, &m_gbufA, &m_gbufN, &m_irr[0], &m_irr[1], &m_histIrr[0], &m_histIrr[1], &m_histN[0], &m_histN[1], &m_histM[0], &m_histM[1] })
+		for (bgfx::TextureHandle* tex : { &m_accumTex, &m_gbufA, &m_gbufN, &m_irr[0], &m_irr[1], &m_histIrr[0], &m_histIrr[1], &m_histN[0], &m_histN[1], &m_histM[0], &m_histM[1], &m_reservoir[0], &m_reservoir[1] })
 		{
 			*tex = bgfx::createTexture2D(
 				  uint16_t(_width)
@@ -434,6 +434,8 @@ public:
 			bgfx::setImage(4, m_gbufA,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufA  (stage 4)
 			bgfx::setImage(5, m_gbufN,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufN  (stage 5)
 			bgfx::setImage(6, m_irr[0],    0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_irr    (stage 6)
+			bgfx::setImage(7, m_reservoir[m_histIdx],     0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_resPrev (stage 7)
+			bgfx::setImage(8, m_reservoir[m_histIdx ^ 1], 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F); // s_resNew  (stage 8)
 			bgfx::dispatch(kViewCompute, m_rqProgram, _numX, _numY, 1);
 		}
 		else
@@ -443,6 +445,8 @@ public:
 			bgfx::setImage(2, m_gbufA,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufA  (stage 2)
 			bgfx::setImage(3, m_gbufN,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufN  (stage 3)
 			bgfx::setImage(4, m_irr[0],    0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_irr    (stage 4)
+			bgfx::setImage(5, m_reservoir[m_histIdx],     0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_resPrev (stage 5)
+			bgfx::setImage(6, m_reservoir[m_histIdx ^ 1], 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F); // s_resNew  (stage 6)
 			bgfx::dispatch(kViewCompute, m_csProgram, _numX, _numY, 1);
 		}
 	}
@@ -520,7 +524,8 @@ public:
 		int stage = m_stage;
 		ImGui::RadioButton("1. Simple RT (direct lighting)", &stage, 0);
 		ImGui::RadioButton("2. Simple PT (progressive)",     &stage, 1);
-		ImGui::RadioButton("3. PT + a-trous denoiser",       &stage, 2);
+		ImGui::RadioButton("3. PT + SVGF denoiser",          &stage, 2);
+		ImGui::RadioButton("4. PT + ReSTIR DI + denoiser",   &stage, 3);
 		if (stage != m_stage)
 		{
 			m_stage = stage;
@@ -568,7 +573,7 @@ public:
 			const float params[4] = { float(m_frameIdx), m_resetAccum ? 1.0f : 0.0f, m_angle, float(m_stage) };
 			bgfx::setUniform(u_params, params);
 
-			const float ptParams[4] = { float(m_spp), float(m_bounces), 0.0f, 0.0f };
+			const float ptParams[4] = { float(m_spp), float(m_bounces), m_angle - m_prevAngle, 0.0f };
 			bgfx::setUniform(u_ptParams, ptParams);
 
 			const uint32_t numX = (m_width + 7)/8;
@@ -576,7 +581,7 @@ public:
 
 			submitTracer(numX, numY);
 
-			if (2 == m_stage)
+			if (2 <= m_stage)
 			{
 				submitDenoiser(numX, numY);
 			}
@@ -653,6 +658,7 @@ public:
 	bgfx::TextureHandle m_histIrr[2]     = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
 	bgfx::TextureHandle m_histN[2]       = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
 	bgfx::TextureHandle m_histM[2]       = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE }; // luminance moments
+	bgfx::TextureHandle m_reservoir[2]   = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE }; // ReSTIR reservoirs
 	uint32_t            m_histIdx        = 0; // double-buffered history (read prev, write new)
 	bgfx::UniformHandle s_texColor       = BGFX_INVALID_HANDLE;
 	bgfx::UniformHandle u_params         = BGFX_INVALID_HANDLE;

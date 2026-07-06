@@ -89,6 +89,80 @@ public float3 tonemap(float3 color)
 	return pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2) );
 }
 
+// Reproject a world-space point to the previous frame's pixel coordinate (pixel-centre
+// units; the caller rounds or bilinearly samples). The camera is static; only the two box
+// instances move, by `delta` radians about their own centres (tall = +, short = -).
+// Returns x = -1e6 when the point was behind the camera.
+public float2 reprojectPixel(float3 p, int inst, float delta, float2 res)
+{
+	float3 pPrev = p;
+	if (inst == 1) pPrev = rotY(p - kTallC,  -delta) + kTallC;
+	if (inst == 2) pPrev = rotY(p - kShortC,  delta) + kShortC;
+
+	float3 v = pPrev - kEye;
+	if (v.z <= 1e-3) return float2(-1e6, -1e6);
+
+	float aspect = res.x / res.y;
+	float2 ndc = float2(v.x / (v.z * kTanHalfFov * aspect), v.y / (v.z * kTanHalfFov) );
+	ndc.y = -ndc.y;
+	return (ndc * 0.5 + 0.5) * res - 0.5;
+}
+
+// --- ReSTIR DI (weighted reservoir sampling of the area-light point) ----------------------
+// The light sample is a point on the ceiling light, stored as xz (the plane is fixed).
+
+public struct Reservoir
+{
+	public float2 lp; // selected light point (xz)
+	public float  W;  // unbiased contribution weight
+	public float  M;  // number of candidates represented
+};
+
+public Reservoir emptyReservoir()
+{
+	Reservoir r;
+	r.lp = float2(0, 0);
+	r.W = 0.0;
+	r.M = 0.0;
+	return r;
+}
+
+// Target pdf p-hat: the geometry term of light point `lp` seen from surface (p, n). The
+// pixel-constant factors (albedo, emission, light area) cancel out of W and are applied
+// at shading time.
+public float restirPHat(float3 p, float3 n, float2 lp)
+{
+	float3 lpos = float3(lp.x, kLightLo.y, lp.y);
+	float3 toL = lpos - p;
+	float d2 = dot(toL, toL);
+	float dist = sqrt(d2);
+	float3 wi = toL / dist;
+	return max(0.0, dot(n, wi) ) * max(0.0, wi.y) / max(d2, 1e-4);
+}
+
+// Stream one candidate (weight w) into the reservoir.
+public void streamCandidate(inout Reservoir r, inout float wSum, float2 cand, float w, inout uint rng)
+{
+	wSum += w;
+	r.M += 1.0;
+	if (rnd(rng) * wSum < w)
+	{
+		r.lp = cand;
+	}
+}
+
+// Merge another reservoir, re-weighting its sample by the target pdf at the CURRENT surface.
+public void streamReservoir(inout Reservoir r, inout float wSum, Reservoir other, float pHatHere, inout uint rng)
+{
+	float w = pHatHere * other.W * other.M;
+	wSum += w;
+	r.M += other.M;
+	if (rnd(rng) * wSum < w)
+	{
+		r.lp = other.lp;
+	}
+}
+
 // Primary-hit info for the G-buffer / demodulation (denoiser stage).
 public struct Primary
 {
