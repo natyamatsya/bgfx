@@ -5,7 +5,7 @@ illumination (colour bleeding, soft shadows) via progressive Monte Carlo accumul
 
 ![screenshot](screenshot.png)
 
-Three **render stages** (selectable in the UI) show the evolution from ray tracing to
+Four **render stages** (selectable in the UI) show the evolution from ray tracing to
 denoised real-time path tracing:
 
 1. **Simple RT** — deterministic direct lighting (light centre + hard shadow + ambient).
@@ -17,7 +17,10 @@ denoised real-time path tracing:
    à-trous wavelet passes whose filter width is guided by a temporally-accumulated
    per-pixel variance estimate (plus normal/depth edge-stopping from a primary-hit
    G-buffer). 1 sample/pixel becomes a clean image in motion, and a converged image stays
-   sharp because the filter shuts off where variance is low.
+   sharp because the filter shuts off where variance is low. Directly-visible emission
+   (the light itself) is composited from the G-buffer *after* filtering — its raw radiance
+   would otherwise dominate the variance at the emitter's edges and make the filter smear
+   it into the ceiling.
 4. **PT + ReSTIR DI + denoiser** — stage 3 with the primary-vertex direct lighting
    resampled by ReSTIR: 8 fresh area-light candidates merged with the reprojected
    previous-frame reservoirs of this pixel and two neighbours (spatiotemporal reuse,
@@ -69,7 +72,8 @@ trace through the bgfx acceleration-structure runtime.
 ## Status
 
 - Both paths verified on Metal (Apple GPU): the ray-query and analytic path tracers render
-  the same image, static and rotated (the screenshot is the ray-query path, 512 samples).
+  the same image, static and rotated (the screenshot is the ray-query path, stage 4:
+  ReSTIR + SVGF, converged).
 - Vulkan compiles end-to-end (SPIR-V ray query + the VK acceleration-structure backend) but
   awaits validation on a Vulkan host with `VK_KHR_ray_query` hardware.
 
