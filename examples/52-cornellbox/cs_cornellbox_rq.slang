@@ -1,22 +1,32 @@
-// Cornell Box, path traced with hardware ray query (Slang).
+// Cornell Box, ray traced with hardware ray query (Slang).
 //
 // This is the *RT-accelerated* path, selected when BGFX_CAPS_RAY_TRACING is present. The
 // geometry is three BLASes (walls+light, tall box, short box) instanced by a TLAS; the two
-// box instances rotate via bgfx::updateTlas when the app's rotation mode is on. Shading is
-// a progressive path tracer (next-event estimation toward the area light + cosine-weighted
-// diffuse bounces) accumulated across frames in s_accum; the running average is tonemapped
-// into s_target every frame. The analytic compute fallback (cs_cornellbox.slang) implements
-// the same estimator without hardware RT.
+// box instances rotate via bgfx::updateTlas. The example exposes three render stages
+// (u_params.w), sharing this one scene:
+//
+//   0 Simple RT -- deterministic direct lighting (light centre + hard shadow + ambient).
+//     No noise, no accumulation: the baseline "ray tracing works" stage.
+//   1 Simple PT -- progressive path tracer (NEE + cosine-weighted diffuse bounces)
+//     accumulated in s_accum; noisy at 1 spp while the scene moves.
+//   2 PT + denoiser -- same path tracer, but the demodulated irradiance and a primary-hit
+//     G-buffer (albedo, normal+depth) are written for the a-trous filter passes
+//     (cs_cornellbox_atrous.slang) that produce the display image.
+//
+// The analytic compute fallback (cs_cornellbox.slang) implements the same stages without
+// hardware RT.
 import bgfx_shader;
 import bgfx_compute;
 
 // bgfx flattens the t/u register spaces into one bind namespace, so the register NUMBERS
-// must be globally unique across resources. scene -> stage 0, s_accum -> stage 1,
-// s_target -> stage 2, materials -> stage 3.
-uniform RaytracingAccelerationStructure scene : register(t0);
+// must be globally unique across resources (stage = register - 0 base, in decl order).
+uniform RaytracingAccelerationStructure scene : register(t0); // stage 0
 
-RWTexture2D<float4> s_accum  : register(u1); // rgb = radiance sum, a = sample count
-RWTexture2D<float4> s_target : register(u2); // tonemapped display image
+RWTexture2D<float4> s_accum   : register(u1); // stage 1: rgb = radiance sum, a = sample count
+RWTexture2D<float4> s_target  : register(u2); // stage 2: tonemapped display image
+RWTexture2D<float4> s_gbufA   : register(u4); // stage 4: primary-hit albedo (mode 2)
+RWTexture2D<float4> s_gbufN   : register(u5); // stage 5: primary-hit normal.xyz + t (mode 2)
+RWTexture2D<float4> s_irr     : register(u6); // stage 6: demodulated irradiance (mode 2)
 
 struct Material
 {
@@ -24,13 +34,18 @@ struct Material
 	float4 emission; // xyz
 	float4 normal;   // xyz, inward-facing, in BLAS-local space
 };
-RWStructuredBuffer<Material> materials : register(u3);
+RWStructuredBuffer<Material> materials : register(u3); // stage 3
 
-// x = frame index (RNG seed), y = reset accumulation (>0.5), z = box rotation angle.
+// x = frame index (RNG seed), y = reset accumulation (>0.5), z = box rotation angle,
+// w = render stage (0 = simple RT, 1 = simple PT, 2 = PT + denoiser).
 uniform float4 u_params;
+
+// x = samples per pixel per frame, y = max path bounces (quality vs frame-time controls).
+uniform float4 u_ptParams;
 
 static const float3 kLightLo = float3(-0.35, 0.997, -0.35);
 static const float3 kLightHi = float3( 0.35, 0.997,  0.35);
+static const float3 kLightCenter = float3(0.0, 0.997, 0.0);
 static const float3 kLightEmission = float3(18.0, 18.0, 18.0);
 static const float  kLightArea = 0.7 * 0.7;
 static const float  kShadowBias = 4e-3;
@@ -114,12 +129,56 @@ bool occluded(float3 ro, float3 rd, float maxT)
 	return dot(e, e) <= 0.0; // the light itself does not shadow
 }
 
-float3 pathTrace(float3 ro, float3 rd, inout uint rng)
+// Primary-hit info for the G-buffer / demodulation (mode 2).
+struct Primary
+{
+	float3 albedo; // 1 for miss/emissive (modulation becomes identity)
+	float3 normal;
+	float  t;
+};
+
+// --- stage 0: simple RT (deterministic direct lighting) ---------------------------------
+
+float3 directLight(float3 ro, float3 rd)
+{
+	float t;
+	int matIdx = traceClosest(ro, rd, 1e30, t);
+	if (matIdx < 0) return float3(0.02, 0.02, 0.02);
+
+	Material m = materials[matIdx];
+	float3 emission = m.emission.xyz;
+	if (dot(emission, emission) > 0.0) return emission;
+
+	float3 albedo = m.albedo.xyz;
+	float3 n = hitNormal(matIdx);
+	float3 p = ro + t*rd;
+
+	float3 toLight = kLightCenter - p;
+	float dist = length(toLight);
+	float3 wi = toLight / dist;
+
+	float ndotl = max(0.0, dot(n, wi) );
+	float3 ambient = albedo * 0.12;
+	float3 direct  = float3(0, 0, 0);
+	if (ndotl > 0.0 && !occluded(p + n*kShadowBias, wi, dist) )
+	{
+		direct = albedo * kLightEmission * (ndotl / (dist*dist) ) * 0.15;
+	}
+	return ambient + direct;
+}
+
+// --- stages 1+2: path tracing ------------------------------------------------------------
+
+float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim)
 {
 	float3 radiance   = float3(0, 0, 0);
 	float3 throughput = float3(1, 1, 1);
+	prim.albedo = float3(1, 1, 1);
+	prim.normal = float3(0, 0, 0);
+	prim.t      = 0.0;
 
-	for (int bounce = 0; bounce < kBounces; ++bounce)
+	const int maxBounces = clamp(int(u_ptParams.y), 1, 8);
+	for (int bounce = 0; bounce < maxBounces; ++bounce)
 	{
 		float t;
 		int matIdx = traceClosest(ro, rd, 1e30, t);
@@ -141,6 +200,13 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng)
 		float3 albedo = m.albedo.xyz;
 		float3 n = hitNormal(matIdx);
 		float3 p = ro + t*rd;
+
+		if (bounce == 0)
+		{
+			prim.albedo = albedo;
+			prim.normal = n;
+			prim.t      = t;
+		}
 
 		// Next-event estimation: sample a point on the area light.
 		float3 lp = float3(
@@ -168,6 +234,12 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng)
 	return radiance;
 }
 
+float3 tonemap(float3 color)
+{
+	color = color / (color + 1.0);
+	return pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2) );
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void computeMain(uint3 dtid : SV_DispatchThreadID)
@@ -175,30 +247,56 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 	float2 res = float2(imageSize(s_target) );
 	if (float(dtid.x) >= res.x || float(dtid.y) >= res.y) return;
 
+	const int mode = int(u_params.w);
+
 	uint rng = pcgHash(dtid.y*9781u + dtid.x + pcgHash(uint(u_params.x)*2971u) );
 
-	// Primary ray with sub-pixel jitter. Image Y is top-down, so flip to a Y-up camera.
-	float2 jitter = float2(rnd(rng), rnd(rng) );
-	float2 uv = (float2(dtid.xy) + jitter) / res * 2.0 - 1.0;
-	uv.y = -uv.y;
 	float aspect = res.x / res.y;
-
 	float3 eye = float3(0.0, 0.0, -3.8);
 	float tanHalfFov = tan(radians(40.0) * 0.5);
-	float3 rd = normalize(float3(uv.x * tanHalfFov * aspect, uv.y * tanHalfFov, 1.0) );
 
-	float3 sample = pathTrace(eye, rd, rng);
+	if (mode == 0)
+	{
+		// Simple RT: deterministic, no accumulation.
+		float2 uv0 = (float2(dtid.xy) + 0.5) / res * 2.0 - 1.0;
+		uv0.y = -uv0.y;
+		float3 rd0 = normalize(float3(uv0.x * tanHalfFov * aspect, uv0.y * tanHalfFov, 1.0) );
+		imageStore(s_target, ivec2(dtid.xy), float4(tonemap(directLight(eye, rd0) ), 1.0) );
+		return;
+	}
+
+	// N sub-pixel-jittered paths per frame (quality vs frame-time control).
+	const int spp = clamp(int(u_ptParams.x), 1, 64);
+	Primary prim;
+	float3 sampleSum = float3(0, 0, 0);
+	for (int s = 0; s < spp; ++s)
+	{
+		float2 jitter = float2(rnd(rng), rnd(rng) );
+		float2 uv = (float2(dtid.xy) + jitter) / res * 2.0 - 1.0;
+		uv.y = -uv.y;
+		float3 rd = normalize(float3(uv.x * tanHalfFov * aspect, uv.y * tanHalfFov, 1.0) );
+		Primary p;
+		sampleSum += pathTrace(eye, rd, rng, p);
+		if (s == 0) prim = p;
+	}
 
 	// Progressive accumulation (reset when the scene changed).
 	float4 prev  = s_accum[int2(dtid.xy)];
-	float3 sum   = u_params.y > 0.5 ? sample : prev.rgb + sample;
-	float  count = u_params.y > 0.5 ? 1.0    : prev.a + 1.0;
+	float3 sum   = u_params.y > 0.5 ? sampleSum : prev.rgb + sampleSum;
+	float  count = u_params.y > 0.5 ? float(spp) : prev.a + float(spp);
 	s_accum[int2(dtid.xy)] = float4(sum, count);
 
-	// Reinhard tonemap + gamma on the running average.
-	float3 color = sum / count;
-	color = color / (color + 1.0);
-	color = pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2) );
+	float3 avg = sum / count;
 
-	imageStore(s_target, ivec2(dtid.xy), float4(color, 1.0) );
+	if (mode == 1)
+	{
+		imageStore(s_target, ivec2(dtid.xy), float4(tonemap(avg), 1.0) );
+		return;
+	}
+
+	// Mode 2: write the G-buffer and the albedo-demodulated irradiance; the a-trous passes
+	// filter it and produce the display image.
+	s_gbufA[int2(dtid.xy)] = float4(prim.albedo, 1.0);
+	s_gbufN[int2(dtid.xy)] = float4(prim.normal, prim.t);
+	s_irr[int2(dtid.xy)]   = float4(avg / max(prim.albedo, float3(1e-3, 1e-3, 1e-3) ), 1.0);
 }
