@@ -48,6 +48,9 @@ trace through the bgfx acceleration-structure runtime.
 
 - `cs_cornellbox_rq.slang` — the hardware ray-query path tracer (TLAS + material buffer).
 - `cs_cornellbox.slang` — the analytic compute-fallback tracer (same stages).
+- `cornellbox.sh.slang` — shared module: scene constants (camera, light, box placement)
+  and the math helpers, imported by every pass (single source of truth).
+- `cs_cornellbox_temporal.slang` — the temporal reprojection pass (backend-independent).
 - `cs_cornellbox_atrous.slang` — the edge-aware à-trous filter pass (backend-independent:
   it denoises the output of either tracer).
 - `vs_cornellbox.slang` / `fs_cornellbox.slang` — a fullscreen quad that presents the image.

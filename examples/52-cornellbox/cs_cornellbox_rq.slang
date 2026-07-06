@@ -17,6 +17,7 @@
 // hardware RT.
 import bgfx_shader;
 import bgfx_compute;
+import "cornellbox.sh";
 
 // bgfx flattens the t/u register spaces into one bind namespace, so the register NUMBERS
 // must be globally unique across resources (stage = register - 0 base, in decl order).
@@ -43,46 +44,7 @@ uniform float4 u_params;
 // x = samples per pixel per frame, y = max path bounces (quality vs frame-time controls).
 uniform float4 u_ptParams;
 
-static const float3 kLightLo = float3(-0.35, 0.997, -0.35);
-static const float3 kLightHi = float3( 0.35, 0.997,  0.35);
-static const float3 kLightCenter = float3(0.0, 0.997, 0.0);
-static const float3 kLightEmission = float3(18.0, 18.0, 18.0);
-static const float  kLightArea = 0.7 * 0.7;
-static const float  kShadowBias = 4e-3;
-static const float  kPi = 3.14159265;
-static const int    kBounces = 4;
-static const uint   kTrisPerInstance = 12;
-
-// --- RNG (PCG) --------------------------------------------------------------------------
-
-uint pcgHash(uint v)
-{
-	v = v*747796405u + 2891336453u;
-	uint w = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
-	return (w >> 22u) ^ w;
-}
-
-float rnd(inout uint state)
-{
-	state = pcgHash(state);
-	return float(state) * (1.0 / 4294967296.0);
-}
-
-// Rotation about Y matching bx::mtxRotateY's (row-vector) convention.
-float3 rotY(float3 v, float a)
-{
-	float c = cos(a), s = sin(a);
-	return float3(c*v.x - s*v.z, v.y, s*v.x + c*v.z);
-}
-
-float3 cosineSample(float3 n, float u1, float u2)
-{
-	float ang = 2.0*kPi*u1;
-	float r = sqrt(u2);
-	float3 t = normalize(cross(abs(n.y) < 0.99 ? float3(0,1,0) : float3(1,0,0), n) );
-	float3 b = cross(n, t);
-	return normalize(t*(r*cos(ang)) + b*(r*sin(ang)) + n*sqrt(max(0.0, 1.0 - u2)) );
-}
+static const uint kTrisPerInstance = 12;
 
 // --- tracing ----------------------------------------------------------------------------
 
@@ -129,14 +91,6 @@ bool occluded(float3 ro, float3 rd, float maxT)
 	return dot(e, e) <= 0.0; // the light itself does not shadow
 }
 
-// Primary-hit info for the G-buffer / demodulation (mode 2).
-struct Primary
-{
-	float3 albedo; // 1 for miss/emissive (modulation becomes identity)
-	float3 normal;
-	float  t;
-};
-
 // --- stage 0: simple RT (deterministic direct lighting) ---------------------------------
 
 float3 directLight(float3 ro, float3 rd)
@@ -176,6 +130,7 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim)
 	prim.albedo = float3(1, 1, 1);
 	prim.normal = float3(0, 0, 0);
 	prim.t      = 0.0;
+	prim.inst   = 0;
 
 	const int maxBounces = clamp(int(u_ptParams.y), 1, 8);
 	for (int bounce = 0; bounce < maxBounces; ++bounce)
@@ -206,14 +161,11 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim)
 			prim.albedo = albedo;
 			prim.normal = n;
 			prim.t      = t;
+			prim.inst   = int(uint(matIdx) / kTrisPerInstance);
 		}
 
 		// Next-event estimation: sample a point on the area light.
-		float3 lp = float3(
-			  lerp(kLightLo.x, kLightHi.x, rnd(rng))
-			, kLightLo.y
-			, lerp(kLightLo.z, kLightHi.z, rnd(rng))
-			);
+		float3 lp = sampleLightPoint(rng);
 		float3 toL = lp - p;
 		float d2 = dot(toL, toL);
 		float dist = sqrt(d2);
@@ -234,12 +186,6 @@ float3 pathTrace(float3 ro, float3 rd, inout uint rng, out Primary prim)
 	return radiance;
 }
 
-float3 tonemap(float3 color)
-{
-	color = color / (color + 1.0);
-	return pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2) );
-}
-
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void computeMain(uint3 dtid : SV_DispatchThreadID)
@@ -251,17 +197,11 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 
 	uint rng = pcgHash(dtid.y*9781u + dtid.x + pcgHash(uint(u_params.x)*2971u) );
 
-	float aspect = res.x / res.y;
-	float3 eye = float3(0.0, 0.0, -3.8);
-	float tanHalfFov = tan(radians(40.0) * 0.5);
-
 	if (mode == 0)
 	{
 		// Simple RT: deterministic, no accumulation.
-		float2 uv0 = (float2(dtid.xy) + 0.5) / res * 2.0 - 1.0;
-		uv0.y = -uv0.y;
-		float3 rd0 = normalize(float3(uv0.x * tanHalfFov * aspect, uv0.y * tanHalfFov, 1.0) );
-		imageStore(s_target, ivec2(dtid.xy), float4(tonemap(directLight(eye, rd0) ), 1.0) );
+		float3 rd0 = primaryRay(float2(dtid.xy), float2(0.5, 0.5), res);
+		imageStore(s_target, ivec2(dtid.xy), float4(tonemap(directLight(kEye, rd0) ), 1.0) );
 		return;
 	}
 
@@ -272,31 +212,28 @@ void computeMain(uint3 dtid : SV_DispatchThreadID)
 	for (int s = 0; s < spp; ++s)
 	{
 		float2 jitter = float2(rnd(rng), rnd(rng) );
-		float2 uv = (float2(dtid.xy) + jitter) / res * 2.0 - 1.0;
-		uv.y = -uv.y;
-		float3 rd = normalize(float3(uv.x * tanHalfFov * aspect, uv.y * tanHalfFov, 1.0) );
+		float3 rd = primaryRay(float2(dtid.xy), jitter, res);
 		Primary p;
-		sampleSum += pathTrace(eye, rd, rng, p);
+		sampleSum += pathTrace(kEye, rd, rng, p);
 		if (s == 0) prim = p;
 	}
 
-	// Progressive accumulation (reset when the scene changed).
-	float4 prev  = s_accum[int2(dtid.xy)];
-	float3 sum   = u_params.y > 0.5 ? sampleSum : prev.rgb + sampleSum;
-	float  count = u_params.y > 0.5 ? float(spp) : prev.a + float(spp);
-	s_accum[int2(dtid.xy)] = float4(sum, count);
-
-	float3 avg = sum / count;
-
 	if (mode == 1)
 	{
-		imageStore(s_target, ivec2(dtid.xy), float4(tonemap(avg), 1.0) );
+		// Progressive accumulation (reset when the scene changed).
+		float4 prev  = s_accum[int2(dtid.xy)];
+		float3 sum   = u_params.y > 0.5 ? sampleSum : prev.rgb + sampleSum;
+		float  count = u_params.y > 0.5 ? float(spp) : prev.a + float(spp);
+		s_accum[int2(dtid.xy)] = float4(sum, count);
+		imageStore(s_target, ivec2(dtid.xy), float4(tonemap(sum / count), 1.0) );
 		return;
 	}
 
-	// Mode 2: write the G-buffer and the albedo-demodulated irradiance; the a-trous passes
-	// filter it and produce the display image.
+	// Mode 2: write the G-buffer and THIS FRAME's albedo-demodulated irradiance (plus the
+	// instance id for reprojection); the temporal pass owns the accumulation, the a-trous
+	// passes filter it, and the final pass produces the display image.
+	float3 fresh = (sampleSum / float(spp)) / max(prim.albedo, float3(1e-3, 1e-3, 1e-3) );
 	s_gbufA[int2(dtid.xy)] = float4(prim.albedo, 1.0);
 	s_gbufN[int2(dtid.xy)] = float4(prim.normal, prim.t);
-	s_irr[int2(dtid.xy)]   = float4(avg / max(prim.albedo, float3(1e-3, 1e-3, 1e-3) ), 1.0);
+	s_irr[int2(dtid.xy)]   = float4(fresh, float(prim.inst) );
 }

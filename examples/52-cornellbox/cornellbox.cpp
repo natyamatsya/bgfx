@@ -3,19 +3,21 @@
  * License: https://github.com/bkaradzic/bgfx/blob/master/LICENSE
  */
 
-// Cornell Box path traced in a Slang shader.
+// Cornell Box ray traced in Slang, in three selectable render stages:
+//   1 Simple RT      -- deterministic direct lighting.
+//   2 Simple PT      -- progressive path tracer (accumulates while the scene is still).
+//   3 PT + denoiser  -- path tracer + temporal reprojection + a-trous filtering.
 //
-// Two paths, selected at runtime:
+// Each stage runs on one of two backend paths, selected by hardware support:
 //  - Hardware ray query (BGFX_CAPS_RAY_TRACING): the scene as three BLASes (walls+light,
 //    tall box, short box) instanced by a TLAS built through the bgfx
-//    acceleration-structure API, traced by inline ray query from a compute shader
-//    (cs_cornellbox_rq.slang). The box instances rotate via bgfx::updateTlas.
-//  - Compute fallback (BGFX_CAPS_COMPUTE only): a self-contained analytic path tracer
+//    acceleration-structure API (cs_cornellbox_rq.slang). The box instances rotate via
+//    bgfx::updateTlas.
+//  - Compute fallback (BGFX_CAPS_COMPUTE only): a self-contained analytic tracer
 //    (cs_cornellbox.slang) with the same estimator and rotating OBBs.
-// Both are progressive path tracers accumulating into an RGBA32F image; the running
-// average is tonemapped into the display texture, which a fullscreen quad presents.
-// Spacebar toggles the rotation mode (the accumulation restarts every frame while the
-// boxes move -- 1 sample/pixel real time -- and converges again once they stop).
+// The temporal + a-trous denoiser passes are backend-independent and shared by both.
+// Spacebar toggles the rotation mode. Scene constants shared by the shaders live in
+// cornellbox.sh.slang; the box placement here must match it.
 
 #include "common.h"
 #include "bgfx_utils.h"
@@ -71,21 +73,32 @@ struct RtMesh
 	}
 
 	// Axis-aligned box [lo,hi] with outward-facing normals (6 quads = 12 triangles).
+	// Each face is described by corner indices into the box's 8 corners (bit0 = x hi,
+	// bit1 = y hi, bit2 = z hi), wound counter-clockwise seen from outside.
 	void box(const float lo[3], const float hi[3], float r, float g, float bl)
 	{
-		const float x0=lo[0], y0=lo[1], z0=lo[2], x1=hi[0], y1=hi[1], z1=hi[2];
-		const float pxL[3]={x0,y0,z0},pxL2[3]={x0,y0,z1},pxL3[3]={x0,y1,z1},pxL4[3]={x0,y1,z0};
-		quad(pxL, pxL2, pxL3, pxL4, -1,0,0, r,g,bl);                                        // -X
-		const float a[3]={x1,y0,z1},b[3]={x1,y0,z0},c[3]={x1,y1,z0},d[3]={x1,y1,z1};
-		quad(a,b,c,d, 1,0,0, r,g,bl);                                                       // +X
-		const float e[3]={x0,y0,z0},f[3]={x1,y0,z0},gg[3]={x1,y0,z1},h[3]={x0,y0,z1};
-		quad(e,f,gg,h, 0,-1,0, r,g,bl);                                                     // -Y
-		const float i[3]={x0,y1,z1},j[3]={x1,y1,z1},k[3]={x1,y1,z0},l[3]={x0,y1,z0};
-		quad(i,j,k,l, 0,1,0, r,g,bl);                                                       // +Y
-		const float m[3]={x1,y0,z0},n[3]={x0,y0,z0},o[3]={x0,y1,z0},p[3]={x1,y1,z0};
-		quad(m,n,o,p, 0,0,-1, r,g,bl);                                                      // -Z
-		const float q[3]={x0,y0,z1},s[3]={x1,y0,z1},t[3]={x1,y1,z1},u[3]={x0,y1,z1};
-		quad(q,s,t,u, 0,0,1, r,g,bl);                                                       // +Z
+		static const struct { uint8_t c[4]; float n[3]; } faces[] =
+		{
+			{ { 0, 4, 6, 2 }, { -1.0f,  0.0f,  0.0f } }, // -X
+			{ { 5, 1, 3, 7 }, {  1.0f,  0.0f,  0.0f } }, // +X
+			{ { 0, 1, 5, 4 }, {  0.0f, -1.0f,  0.0f } }, // -Y
+			{ { 6, 7, 3, 2 }, {  0.0f,  1.0f,  0.0f } }, // +Y
+			{ { 1, 0, 2, 3 }, {  0.0f,  0.0f, -1.0f } }, // -Z
+			{ { 4, 5, 7, 6 }, {  0.0f,  0.0f,  1.0f } }, // +Z
+		};
+
+		for (const auto& face : faces)
+		{
+			float corner[4][3];
+			for (uint32_t ii = 0; ii < 4; ++ii)
+			{
+				const uint8_t cc = face.c[ii];
+				corner[ii][0] = (cc & 1) ? hi[0] : lo[0];
+				corner[ii][1] = (cc & 2) ? hi[1] : lo[1];
+				corner[ii][2] = (cc & 4) ? hi[2] : lo[2];
+			}
+			quad(corner[0], corner[1], corner[2], corner[3], face.n[0], face.n[1], face.n[2], r, g, bl);
+		}
 	}
 };
 
@@ -242,11 +255,13 @@ public:
 		{
 			m_csProgram      = bgfx::createProgram(loadShader("cs_cornellbox"), true);
 			m_atrousProgram  = bgfx::createProgram(loadShader("cs_cornellbox_atrous"), true);
+			m_temporalProgram = bgfx::createProgram(loadShader("cs_cornellbox_temporal"), true);
 			m_displayProgram = loadProgram("vs_cornellbox", "fs_cornellbox");
 			s_texColor       = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
 			u_params         = bgfx::createUniform("u_params", bgfx::UniformType::Vec4);
 			u_filterParams   = bgfx::createUniform("u_filterParams", bgfx::UniformType::Vec4);
 			u_ptParams       = bgfx::createUniform("u_ptParams", bgfx::UniformType::Vec4);
+			u_tparams        = bgfx::createUniform("u_tparams", bgfx::UniformType::Vec4);
 			createOutputTextures(m_width, m_height);
 		}
 
@@ -322,15 +337,17 @@ public:
 
 		if (m_computeSupported)
 		{
-			for (bgfx::TextureHandle tex : { m_accumTex, m_gbufA, m_gbufN, m_irr[0], m_irr[1], m_outputTex })
+			for (bgfx::TextureHandle tex : { m_accumTex, m_gbufA, m_gbufN, m_irr[0], m_irr[1], m_histIrr[0], m_histIrr[1], m_histN[0], m_histN[1], m_histM[0], m_histM[1], m_outputTex })
 			{
 				if (bgfx::isValid(tex) ) bgfx::destroy(tex);
 			}
+			if (bgfx::isValid(u_tparams) )        bgfx::destroy(u_tparams);
 			if (bgfx::isValid(u_ptParams) )       bgfx::destroy(u_ptParams);
 			if (bgfx::isValid(u_filterParams) )   bgfx::destroy(u_filterParams);
 			if (bgfx::isValid(u_params) )         bgfx::destroy(u_params);
 			if (bgfx::isValid(s_texColor) )       bgfx::destroy(s_texColor);
 			if (bgfx::isValid(m_displayProgram) ) bgfx::destroy(m_displayProgram);
+			if (bgfx::isValid(m_temporalProgram) ) bgfx::destroy(m_temporalProgram);
 			if (bgfx::isValid(m_atrousProgram) )  bgfx::destroy(m_atrousProgram);
 			if (bgfx::isValid(m_csProgram) )      bgfx::destroy(m_csProgram);
 		}
@@ -342,7 +359,7 @@ public:
 
 	void createOutputTextures(uint32_t _width, uint32_t _height)
 	{
-		bgfx::TextureHandle* textures[] = { &m_outputTex, &m_accumTex, &m_gbufA, &m_gbufN, &m_irr[0], &m_irr[1] };
+		bgfx::TextureHandle* textures[] = { &m_outputTex, &m_accumTex, &m_gbufA, &m_gbufN, &m_irr[0], &m_irr[1], &m_histIrr[0], &m_histIrr[1], &m_histN[0], &m_histN[1], &m_histM[0], &m_histM[1] };
 		for (bgfx::TextureHandle* tex : textures)
 		{
 			if (bgfx::isValid(*tex) )
@@ -368,7 +385,7 @@ public:
 
 		// Accumulation, G-buffer (albedo, normal+depth), and the a-trous ping-pong
 		// irradiance images.
-		for (bgfx::TextureHandle* tex : { &m_accumTex, &m_gbufA, &m_gbufN, &m_irr[0], &m_irr[1] })
+		for (bgfx::TextureHandle* tex : { &m_accumTex, &m_gbufA, &m_gbufN, &m_irr[0], &m_irr[1], &m_histIrr[0], &m_histIrr[1], &m_histN[0], &m_histN[1], &m_histM[0], &m_histM[1] })
 		{
 			*tex = bgfx::createTexture2D(
 				  uint16_t(_width)
@@ -381,6 +398,7 @@ public:
 		}
 
 		m_resetAccum = true;
+		m_resetHist  = true;
 	}
 
 	// Instance transforms in createTlas order: walls (identity), tall box (+angle), short
@@ -401,6 +419,70 @@ public:
 		bx::mtxMul(&xf[32], rot, trn);
 
 		bgfx::updateTlas(m_tlas, bgfx::copy(xf, sizeof(xf) ) );
+	}
+
+	// Dispatch whichever tracer applies. Stages 0/1 write the display image directly;
+	// stage 2 writes the G-buffer + this frame's demodulated irradiance for the denoiser.
+	void submitTracer(uint32_t _numX, uint32_t _numY)
+	{
+		if (m_rtSupported)
+		{
+			bgfx::setAccelerationStructure(0, m_tlas);                                          // scene     (stage 0)
+			bgfx::setImage(1, m_accumTex,  0, bgfx::Access::ReadWrite, bgfx::TextureFormat::RGBA32F); // s_accum  (stage 1)
+			bgfx::setImage(2, m_outputTex, 0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA8);   // s_target (stage 2)
+			bgfx::setBuffer(3, m_materialBuf, bgfx::Access::Read);                              // materials (stage 3)
+			bgfx::setImage(4, m_gbufA,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufA  (stage 4)
+			bgfx::setImage(5, m_gbufN,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufN  (stage 5)
+			bgfx::setImage(6, m_irr[0],    0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_irr    (stage 6)
+			bgfx::dispatch(kViewCompute, m_rqProgram, _numX, _numY, 1);
+		}
+		else
+		{
+			bgfx::setImage(0, m_accumTex,  0, bgfx::Access::ReadWrite, bgfx::TextureFormat::RGBA32F); // s_accum  (stage 0)
+			bgfx::setImage(1, m_outputTex, 0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA8);   // s_target (stage 1)
+			bgfx::setImage(2, m_gbufA,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufA  (stage 2)
+			bgfx::setImage(3, m_gbufN,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufN  (stage 3)
+			bgfx::setImage(4, m_irr[0],    0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_irr    (stage 4)
+			bgfx::dispatch(kViewCompute, m_csProgram, _numX, _numY, 1);
+		}
+	}
+
+	// Stage 2 denoiser: temporal reprojection (accumulate against last frame's history,
+	// reprojecting the rotating boxes), then the a-trous filter chain (doubling step size)
+	// ping-ponging between the irradiance images; the last pass re-modulates the albedo
+	// and tonemaps into the display image.
+	void submitDenoiser(uint32_t _numX, uint32_t _numY)
+	{
+			const float tparams[4] = { m_angle - m_prevAngle, m_angle, m_resetHist ? 1.0f : 0.0f, 0.0f };
+			bgfx::setUniform(u_tparams, tparams);
+			const uint32_t prevHist = m_histIdx;
+			const uint32_t newHist  = m_histIdx ^ 1;
+			bgfx::setImage(0, m_irr[0],           0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_irrCurr
+			bgfx::setImage(1, m_histIrr[prevHist], 0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_histIrrPrev
+			bgfx::setImage(2, m_histN[prevHist],   0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_histNPrev
+			bgfx::setImage(3, m_gbufN,             0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_gbufN
+			bgfx::setImage(4, m_irr[1],            0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F); // s_irrOut
+			bgfx::setImage(5, m_histIrr[newHist],  0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F); // s_histIrrNew
+			bgfx::setImage(6, m_histN[newHist],    0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F); // s_histNNew
+			bgfx::setImage(7, m_histM[prevHist],   0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_histMPrev
+			bgfx::setImage(8, m_histM[newHist],    0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F); // s_histMNew
+			bgfx::dispatch(kViewTemporal, m_temporalProgram, _numX, _numY, 1);
+			m_histIdx = newHist;
+			m_resetHist = false;
+
+			for (uint32_t pass = 0; pass < kNumFilterPasses; ++pass)
+			{
+				const bool last = pass == kNumFilterPasses - 1;
+				const float filterParams[4] = { float(1 << pass), last ? 1.0f : 0.0f, 0.0f, 0.0f };
+				bgfx::setUniform(u_filterParams, filterParams);
+
+				bgfx::setImage(0, m_irr[(pass + 1) & 1], 0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_irrIn
+				bgfx::setImage(1, m_irr[pass & 1],       0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F); // s_irrOut
+				bgfx::setImage(2, m_gbufN,               0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_gbufN
+				bgfx::setImage(3, m_gbufA,               0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_gbufA
+				bgfx::setImage(4, m_outputTex,           0, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);   // s_target
+				bgfx::dispatch(bgfx::ViewId(kViewFilter0 + pass), m_atrousProgram, _numX, _numY, 1);
+			}
 	}
 
 	bool update() override
@@ -443,6 +525,7 @@ public:
 		{
 			m_stage = stage;
 			m_resetAccum = true;
+			m_resetHist  = true;
 		}
 		ImGui::Separator();
 		ImGui::SliderInt("Samples/frame", &m_spp, 1, 32);
@@ -491,49 +574,14 @@ public:
 			const uint32_t numX = (m_width + 7)/8;
 			const uint32_t numY = (m_height + 7)/8;
 
-			// Trace. Stage 0/1 write the display image directly; stage 2 writes the
-			// G-buffer + demodulated irradiance for the filter chain below.
-			if (m_rtSupported)
-			{
-				bgfx::setAccelerationStructure(0, m_tlas);                                          // scene     (stage 0)
-				bgfx::setImage(1, m_accumTex,  0, bgfx::Access::ReadWrite, bgfx::TextureFormat::RGBA32F); // s_accum  (stage 1)
-				bgfx::setImage(2, m_outputTex, 0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA8);   // s_target (stage 2)
-				bgfx::setBuffer(3, m_materialBuf, bgfx::Access::Read);                              // materials (stage 3)
-				bgfx::setImage(4, m_gbufA,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufA  (stage 4)
-				bgfx::setImage(5, m_gbufN,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufN  (stage 5)
-				bgfx::setImage(6, m_irr[0],    0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_irr    (stage 6)
-				bgfx::dispatch(kViewCompute, m_rqProgram, numX, numY, 1);
-			}
-			else
-			{
-				bgfx::setImage(0, m_accumTex,  0, bgfx::Access::ReadWrite, bgfx::TextureFormat::RGBA32F); // s_accum  (stage 0)
-				bgfx::setImage(1, m_outputTex, 0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA8);   // s_target (stage 1)
-				bgfx::setImage(2, m_gbufA,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufA  (stage 2)
-				bgfx::setImage(3, m_gbufN,     0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_gbufN  (stage 3)
-				bgfx::setImage(4, m_irr[0],    0, bgfx::Access::Write,     bgfx::TextureFormat::RGBA32F); // s_irr    (stage 4)
-				bgfx::dispatch(kViewCompute, m_csProgram, numX, numY, 1);
-			}
+			submitTracer(numX, numY);
 
-			// Stage 2: a-trous filter chain on the demodulated irradiance (doubling step
-			// size), ping-ponging between the irradiance images; the last pass re-modulates
-			// the albedo and tonemaps into the display image.
 			if (2 == m_stage)
 			{
-				for (uint32_t pass = 0; pass < kNumFilterPasses; ++pass)
-				{
-					const bool last = pass == kNumFilterPasses - 1;
-					const float filterParams[4] = { float(1 << pass), last ? 1.0f : 0.0f, 0.0f, 0.0f };
-					bgfx::setUniform(u_filterParams, filterParams);
-
-					bgfx::setImage(0, m_irr[pass & 1],       0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_irrIn
-					bgfx::setImage(1, m_irr[(pass + 1) & 1], 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F); // s_irrOut
-					bgfx::setImage(2, m_gbufN,               0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_gbufN
-					bgfx::setImage(3, m_gbufA,               0, bgfx::Access::Read,  bgfx::TextureFormat::RGBA32F); // s_gbufA
-					bgfx::setImage(4, m_outputTex,           0, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);   // s_target
-					bgfx::dispatch(bgfx::ViewId(kViewFilter0 + pass), m_atrousProgram, numX, numY, 1);
-				}
+				submitDenoiser(numX, numY);
 			}
 
+			m_prevAngle  = m_angle;
 			m_resetAccum = false;
 			++m_frameIdx;
 
@@ -559,8 +607,9 @@ public:
 		return true;
 	}
 
-	static constexpr bgfx::ViewId kViewCompute = 0;
-	static constexpr bgfx::ViewId kViewFilter0 = 1; // a-trous passes (one view per pass for ordering)
+	static constexpr bgfx::ViewId kViewCompute  = 0;
+	static constexpr bgfx::ViewId kViewTemporal = 1; // temporal reprojection pass
+	static constexpr bgfx::ViewId kViewFilter0  = 2; // a-trous passes (one view per pass for ordering)
 	static constexpr uint32_t     kNumFilterPasses = 4;
 	static constexpr bgfx::ViewId kViewDisplay = kViewFilter0 + kNumFilterPasses;
 	static constexpr uint32_t     kNumBlas     = 3; // walls+light, tall box, short box
@@ -581,6 +630,8 @@ public:
 	bool     m_rotate       = false;
 	bool     m_spaceWasDown = false;
 	bool     m_resetAccum   = true;
+	bool     m_resetHist    = true;
+	float    m_prevAngle    = 0.0f;
 	int      m_stage        = 2; // 0 = simple RT, 1 = simple PT, 2 = PT + denoiser
 	int      m_spp          = 1; // path samples per pixel per frame
 	int      m_bounces      = 4; // max path bounces
@@ -592,16 +643,22 @@ public:
 	bgfx::ProgramHandle m_csProgram      = BGFX_INVALID_HANDLE;
 	bgfx::ProgramHandle m_rqProgram      = BGFX_INVALID_HANDLE;
 	bgfx::ProgramHandle m_atrousProgram  = BGFX_INVALID_HANDLE;
+	bgfx::ProgramHandle m_temporalProgram = BGFX_INVALID_HANDLE;
 	bgfx::ProgramHandle m_displayProgram = BGFX_INVALID_HANDLE;
 	bgfx::TextureHandle m_outputTex      = BGFX_INVALID_HANDLE;
 	bgfx::TextureHandle m_accumTex       = BGFX_INVALID_HANDLE;
 	bgfx::TextureHandle m_gbufA          = BGFX_INVALID_HANDLE;
 	bgfx::TextureHandle m_gbufN          = BGFX_INVALID_HANDLE;
 	bgfx::TextureHandle m_irr[2]         = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+	bgfx::TextureHandle m_histIrr[2]     = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+	bgfx::TextureHandle m_histN[2]       = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
+	bgfx::TextureHandle m_histM[2]       = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE }; // luminance moments
+	uint32_t            m_histIdx        = 0; // double-buffered history (read prev, write new)
 	bgfx::UniformHandle s_texColor       = BGFX_INVALID_HANDLE;
 	bgfx::UniformHandle u_params         = BGFX_INVALID_HANDLE;
 	bgfx::UniformHandle u_filterParams   = BGFX_INVALID_HANDLE;
 	bgfx::UniformHandle u_ptParams       = BGFX_INVALID_HANDLE;
+	bgfx::UniformHandle u_tparams        = BGFX_INVALID_HANDLE;
 
 	// Ray-query path resources.
 	bgfx::VertexBufferHandle          m_vbh[kNumBlas]  = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
