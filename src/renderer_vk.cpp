@@ -440,22 +440,22 @@ VK_IMPORT_DEVICE
 		{ "VK_EXT_custom_border_color",             1, false, false, true,                                                          Layer::Count },
 		{ "VK_EXT_debug_report",                    1, false, false, false,                                                         Layer::Count },
 		{ "VK_EXT_debug_utils",                     1, false, false, BGFX_CONFIG_DEBUG_OBJECT_NAME || BGFX_CONFIG_DEBUG_ANNOTATION, Layer::Count },
-		{ "VK_EXT_descriptor_indexing",             1, false, false, false,                                                         Layer::Count },
+		{ "VK_EXT_descriptor_indexing",             1, false, false, true,                                                         Layer::Count },
 		{ "VK_EXT_line_rasterization",              1, false, false, true,                                                          Layer::Count },
 		{ "VK_EXT_memory_budget",                   1, false, false, true,                                                          Layer::Count },
 		{ "VK_EXT_shader_viewport_index_layer",     1, false, false, true,                                                          Layer::Count },
 		{ "VK_EXT_surface_maintenance1",            1, false, false, true,                                                          Layer::Count },
 		{ "VK_EXT_swapchain_maintenance1",          1, false, false, true,                                                          Layer::Count },
-		{ "VK_KHR_acceleration_structure",          1, false, false, false,                                                         Layer::Count },
-		{ "VK_KHR_buffer_device_address",           1, false, false, false,                                                         Layer::Count },
-		{ "VK_KHR_deferred_host_operations",        1, false, false, false,                                                         Layer::Count },
+		{ "VK_KHR_acceleration_structure",          1, false, false, true,                                                         Layer::Count },
+		{ "VK_KHR_buffer_device_address",           1, false, false, true,                                                         Layer::Count },
+		{ "VK_KHR_deferred_host_operations",        1, false, false, true,                                                         Layer::Count },
 		{ "VK_KHR_draw_indirect_count",             1, false, false, true,                                                          Layer::Count },
 		{ "VK_KHR_fragment_shading_rate",           1, false, false, true,                                                          Layer::Count },
 		{ "VK_KHR_get_physical_device_properties2", 1, false, false, true,                                                          Layer::Count },
 		{ "VK_KHR_get_surface_capabilities2",       1, false, false, true,                                                          Layer::Count },
-		{ "VK_KHR_ray_query",                       1, false, false, false,                                                         Layer::Count },
-		{ "VK_KHR_ray_tracing_pipeline",            1, false, false, false,                                                         Layer::Count },
-		{ "VK_KHR_spirv_1_4",                       1, false, false, false,                                                         Layer::Count },
+		{ "VK_KHR_ray_query",                       1, false, false, true,                                                         Layer::Count },
+		{ "VK_KHR_ray_tracing_pipeline",            1, false, false, true,                                                         Layer::Count },
+		{ "VK_KHR_spirv_1_4",                       1, false, false, true,                                                         Layer::Count },
 		{ "VK_KHR_video_queue",                     1, false, false, true,                                                          Layer::Count },
 		{ "VK_KHR_video_decode_queue",              1, false, false, true,                                                          Layer::Count },
 		{ "VK_KHR_video_decode_h264",               1, false, false, true,                                                          Layer::Count },
@@ -1288,6 +1288,30 @@ VK_IMPORT_DEVICE
 
 	struct TextureVK;
 
+	// Turn the whole acceleration-structure extension stack off: when the feature check
+	// fails (or ray tracing is opted out) none of it may be enabled at device creation --
+	// on drivers without the features an enabled-but-unsupported extension can fail
+	// vkCreateDevice outright.
+	static void disableRayTracingExtensions()
+	{
+		const Extension::Enum rayTracingStack[] =
+		{
+			Extension::EXT_descriptor_indexing,
+			Extension::KHR_acceleration_structure,
+			Extension::KHR_buffer_device_address,
+			Extension::KHR_deferred_host_operations,
+			Extension::KHR_ray_query,
+			Extension::KHR_ray_tracing_pipeline,
+			Extension::KHR_spirv_1_4,
+		};
+
+		for (Extension::Enum ext : rayTracingStack)
+		{
+			s_extension[ext].m_supported  = false;
+			s_extension[ext].m_initialize = false;
+		}
+	}
+
 	// Defined below (after s_renderVK); used by the acceleration-structure create paths.
 	static VkDeviceAddress getBufferDeviceAddress(VkBuffer _buffer);
 
@@ -1995,16 +2019,12 @@ VK_IMPORT_INSTANCE
 					}
 					else
 					{
-						s_extension[Extension::KHR_acceleration_structure ].m_supported = false;
-						s_extension[Extension::KHR_ray_query              ].m_supported = false;
-						s_extension[Extension::KHR_ray_tracing_pipeline   ].m_supported = false;
+						disableRayTracingExtensions();
 					}
 				}
 				else
 				{
-					s_extension[Extension::KHR_acceleration_structure ].m_supported = false;
-					s_extension[Extension::KHR_ray_query              ].m_supported = false;
-					s_extension[Extension::KHR_ray_tracing_pipeline   ].m_supported = false;
+					disableRayTracingExtensions();
 				}
 
 				m_deviceFeatures =
