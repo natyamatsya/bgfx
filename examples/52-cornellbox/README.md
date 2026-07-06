@@ -5,8 +5,21 @@ illumination (colour bleeding, soft shadows) via progressive Monte Carlo accumul
 
 ![screenshot](screenshot.png)
 
-Two rendering paths share one scene and one estimator (next-event estimation toward the
-ceiling area light + cosine-weighted diffuse bounces), selected at runtime:
+Three **render stages** (selectable in the UI) show the evolution from ray tracing to
+denoised real-time path tracing:
+
+1. **Simple RT** — deterministic direct lighting (light centre + hard shadow + ambient).
+   Noise-free baseline; what "ray tracing works" looks like.
+2. **Simple PT** — the progressive path tracer. Converges when still; raw 1 sample/pixel
+   noise while the boxes rotate.
+3. **PT + à-trous denoiser** — the same path tracer, but the albedo-demodulated irradiance
+   is filtered by 4 edge-aware à-trous wavelet passes (SVGF-style, guided by a primary-hit
+   normal/depth G-buffer) before re-modulation and tonemapping. 1 sample/pixel becomes a
+   clean image in motion.
+
+Two rendering paths share the scene and all three stages (the estimator: next-event
+estimation toward the ceiling area light + cosine-weighted diffuse bounces), selected at
+runtime:
 
 - **RT accelerated** (`cs_cornellbox_rq.slang`) — the scene as three BLASes (walls+light,
   tall box, short box) instanced by a TLAS built through the bgfx acceleration-structure
@@ -34,7 +47,9 @@ trace through the bgfx acceleration-structure runtime.
 ## Files
 
 - `cs_cornellbox_rq.slang` — the hardware ray-query path tracer (TLAS + material buffer).
-- `cs_cornellbox.slang` — the analytic compute-fallback path tracer.
+- `cs_cornellbox.slang` — the analytic compute-fallback tracer (same stages).
+- `cs_cornellbox_atrous.slang` — the edge-aware à-trous filter pass (backend-independent:
+  it denoises the output of either tracer).
 - `vs_cornellbox.slang` / `fs_cornellbox.slang` — a fullscreen quad that presents the image.
 - `cornellbox.cpp` — the app: builds the meshes + BLAS/TLAS when `BGFX_CAPS_RAY_TRACING`
   is present, drives the accumulation/rotation state, dispatches whichever tracer applies.
