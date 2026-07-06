@@ -3351,15 +3351,29 @@ public static partial class bgfx
 	public static extern unsafe AccelerationStructureHandle create_blas(VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer);
 	
 	/// <summary>
-	/// Create a top-level acceleration structure (TLAS) with a single BLAS instance
-	/// (identity transform).
+	/// Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
+	/// acceleration structures. All instances start with the identity transform; use
+	/// `updateTlas` to set per-instance transforms.
 	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
 	/// </summary>
 	///
-	/// <param name="_blas">Bottom-level acceleration structure to instance.</param>
+	/// <param name="_blases">Bottom-level acceleration structures, one per instance.</param>
+	/// <param name="_num">Number of instances.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_create_tlas", CallingConvention = CallingConvention.Cdecl)]
-	public static extern unsafe AccelerationStructureHandle create_tlas(AccelerationStructureHandle _blas);
+	public static extern unsafe AccelerationStructureHandle create_tlas(AccelerationStructureHandle* _blases, ushort _num);
+	
+	/// <summary>
+	/// Update the per-instance transforms of a top-level acceleration structure and rebuild
+	/// it in place.
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	/// </summary>
+	///
+	/// <param name="_handle">Top-level acceleration structure handle.</param>
+	/// <param name="_mem">One 4x4 matrix per instance (as produced by `bx::mtx*`), in `createTlas` order.</param>
+	///
+	[DllImport(DllName, EntryPoint="bgfx_update_tlas", CallingConvention = CallingConvention.Cdecl)]
+	public static extern unsafe void update_tlas(AccelerationStructureHandle _handle, Memory* _mem);
 	
 	/// <summary>
 	/// Destroy acceleration structure.

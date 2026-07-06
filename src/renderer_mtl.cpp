@@ -1385,12 +1385,30 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			endEncoding();
 		}
 
-		void createTlas(AccelerationStructureHandle _handle, AccelerationStructureHandle _blas) override
+		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
 		{
+			MTL::AccelerationStructure* blases[BGFX_CONFIG_MAX_TLAS_INSTANCES];
+			for (uint16_t ii = 0; ii < _num; ++ii)
+			{
+				blases[ii] = m_accelerationStructures[_blases[ii].idx].m_accelerationStructure;
+			}
+
 			m_accelerationStructures[_handle.idx].createTlas(
 				  m_device
 				, getAccelerationStructureCommandEncoder()
-				, m_accelerationStructures[_blas.idx]
+				, blases
+				, _num
+				);
+
+			endEncoding();
+		}
+
+		void updateTlas(AccelerationStructureHandle _handle, const Memory* _mem) override
+		{
+			m_accelerationStructures[_handle.idx].updateTlas(
+				  m_device
+				, getAccelerationStructureCommandEncoder()
+				, (const float*)_mem->data
 				);
 
 			endEncoding();
@@ -4092,35 +4110,71 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		desc->release();
 	}
 
-	void AccelerationStructureMtl::createTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const AccelerationStructureMtl& _blas)
+	void AccelerationStructureMtl::createTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, MTL::AccelerationStructure* const* _blases, uint16_t _num)
 	{
-		m_blas = _blas.m_accelerationStructure;
+		m_numInstances = _num;
+		for (uint16_t ii = 0; ii < _num; ++ii)
+		{
+			m_blasList[ii] = _blases[ii];
+		}
 
-		// One instance of the bottom-level AS at identity transform.
-		MTL::AccelerationStructureInstanceDescriptor instance;
-		bx::memSet(&instance, 0, sizeof(instance) );
-		instance.transformationMatrix = MTL::PackedFloat4x3(
-			  MTL::PackedFloat3(1.0f, 0.0f, 0.0f)
-			, MTL::PackedFloat3(0.0f, 1.0f, 0.0f)
-			, MTL::PackedFloat3(0.0f, 0.0f, 1.0f)
-			, MTL::PackedFloat3(0.0f, 0.0f, 0.0f)
-			);
-		instance.options = MTL::AccelerationStructureInstanceOptionDisableTriangleCulling;
-		instance.mask    = 0xff;
-		instance.intersectionFunctionTableOffset = 0;
-		instance.accelerationStructureIndex      = 0;
+		// One instance per BLAS, identity transforms (see updateTlas).
+		m_instanceBuffer = _device->newBuffer(_num*sizeof(MTL::AccelerationStructureInstanceDescriptor), MTL::ResourceStorageModeShared);
+		MTL::AccelerationStructureInstanceDescriptor* instances = (MTL::AccelerationStructureInstanceDescriptor*)m_instanceBuffer->contents();
+		for (uint16_t ii = 0; ii < _num; ++ii)
+		{
+			MTL::AccelerationStructureInstanceDescriptor& instance = instances[ii];
+			bx::memSet(&instance, 0, sizeof(instance) );
+			instance.transformationMatrix = MTL::PackedFloat4x3(
+				  MTL::PackedFloat3(1.0f, 0.0f, 0.0f)
+				, MTL::PackedFloat3(0.0f, 1.0f, 0.0f)
+				, MTL::PackedFloat3(0.0f, 0.0f, 1.0f)
+				, MTL::PackedFloat3(0.0f, 0.0f, 0.0f)
+				);
+			instance.options = MTL::AccelerationStructureInstanceOptionDisableTriangleCulling;
+			instance.mask    = 0xff;
+			instance.intersectionFunctionTableOffset = 0;
+			instance.accelerationStructureIndex      = ii;
+		}
 
-		m_instanceBuffer = _device->newBuffer(&instance, sizeof(instance), MTL::ResourceStorageModeShared);
+		buildTlas(_device, _encoder, true);
+	}
 
+	void AccelerationStructureMtl::updateTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const float* _transforms)
+	{
+		// Rewrite the instance transforms. bx matrices are row-vector 4x4; Metal wants a
+		// column-vector packed 4x3 (columns of float3), i.e. columns[j] = bx[j*4 + 0..2].
+		MTL::AccelerationStructureInstanceDescriptor* instances = (MTL::AccelerationStructureInstanceDescriptor*)m_instanceBuffer->contents();
+		for (uint16_t ii = 0; ii < m_numInstances; ++ii)
+		{
+			const float* mtx = &_transforms[ii*16];
+			instances[ii].transformationMatrix = MTL::PackedFloat4x3(
+				  MTL::PackedFloat3(mtx[ 0], mtx[ 1], mtx[ 2])
+				, MTL::PackedFloat3(mtx[ 4], mtx[ 5], mtx[ 6])
+				, MTL::PackedFloat3(mtx[ 8], mtx[ 9], mtx[10])
+				, MTL::PackedFloat3(mtx[12], mtx[13], mtx[14])
+				);
+		}
+
+		buildTlas(_device, _encoder, false);
+	}
+
+	void AccelerationStructureMtl::buildTlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, bool _create)
+	{
 		MTL::InstanceAccelerationStructureDescriptor* desc = MTL::InstanceAccelerationStructureDescriptor::alloc()->init();
-		desc->setInstanceCount(1);
+		desc->setInstanceCount(m_numInstances);
 		desc->setInstanceDescriptorBuffer(m_instanceBuffer);
-		desc->setInstancedAccelerationStructures(NS::Array::array( (const NS::Object*)_blas.m_accelerationStructure) );
+		desc->setInstancedAccelerationStructures(NS::Array::array( (const NS::Object* const*)m_blasList, m_numInstances) );
 
-		const MTL::AccelerationStructureSizes sizes = _device->accelerationStructureSizes(desc);
-		m_accelerationStructure = _device->newAccelerationStructure(sizes.accelerationStructureSize);
-		m_scratchBuffer         = _device->newBuffer(sizes.buildScratchBufferSize, MTL::ResourceStorageModePrivate);
+		if (_create)
+		{
+			const MTL::AccelerationStructureSizes sizes = _device->accelerationStructureSizes(desc);
+			m_accelerationStructure = _device->newAccelerationStructure(sizes.accelerationStructureSize);
+			m_scratchBuffer         = _device->newBuffer(sizes.buildScratchBufferSize, MTL::ResourceStorageModePrivate);
+		}
 
+		// Rebuilds write into the same AS object; Metal's automatic hazard tracking orders
+		// the build against in-flight reads.
 		_encoder->buildAccelerationStructure(m_accelerationStructure, desc, m_scratchBuffer, 0);
 
 		desc->release();
@@ -4131,7 +4185,7 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		MTL_RELEASE_W(m_accelerationStructure, 0);
 		MTL_RELEASE_W(m_scratchBuffer, 0);
 		MTL_RELEASE_W(m_instanceBuffer, 0);
-		m_blas = NULL; // not owned (owned by the BLAS object)
+		m_numInstances = 0; // the BLAS list is not owned (owned by the BLAS objects)
 	}
 
 	void BufferMtl::create(uint32_t _size, void* _data, uint16_t _flags, uint16_t _stride, bool _vertex)
@@ -6508,12 +6562,12 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 									const AccelerationStructureMtl& as = m_accelerationStructures[bind.m_idx];
 									m_computeCommandEncoder->setAccelerationStructure(as.m_accelerationStructure, stage + 1);
 
-									// Bound acceleration structures (and the BLAS a TLAS references)
+									// Bound acceleration structures (and every BLAS a TLAS references)
 									// must be made resident explicitly, or the GPU faults.
 									m_computeCommandEncoder->useResource(as.m_accelerationStructure, MTL::ResourceUsageRead);
-									if (NULL != as.m_blas)
+									for (uint16_t blasIdx = 0; blasIdx < as.m_numInstances; ++blasIdx)
 									{
-										m_computeCommandEncoder->useResource(as.m_blas, MTL::ResourceUsageRead);
+										m_computeCommandEncoder->useResource(as.m_blasList[blasIdx], MTL::ResourceUsageRead);
 									}
 								}
 								break;

@@ -534,8 +534,11 @@ VK_DESTROY_FUNC(DescriptorSet);
 		}
 
 		void createBlas(VkCommandBuffer _commandBuffer, VkDeviceAddress _vertexAddress, uint32_t _vertexStride, uint32_t _numVertices, VkDeviceAddress _indexAddress, VkIndexType _indexType, uint32_t _numTriangles);
-		void createTlas(VkCommandBuffer _commandBuffer, VkDeviceAddress _blasAddress);
+		void createTlas(VkCommandBuffer _commandBuffer, const VkDeviceAddress* _blasAddresses, uint16_t _num);
+		void updateTlas(VkCommandBuffer _commandBuffer, const float* _transforms); // m_numInstances 4x4 bx matrices
 		void destroy();
+
+		void buildTlas(VkCommandBuffer _commandBuffer, bool _create);
 
 		VkBuffer m_buffer;         // acceleration-structure storage
 		VkBuffer m_scratchBuffer;  // build scratch (kept until destroy)
@@ -545,6 +548,7 @@ VK_DESTROY_FUNC(DescriptorSet);
 		VkDeviceMemory m_instanceMem;
 		VkAccelerationStructureKHR m_accelerationStructure;
 		VkDeviceAddress m_deviceAddress;
+		uint16_t m_numInstances = 0; // TLAS only
 	};
 
 	struct BindType

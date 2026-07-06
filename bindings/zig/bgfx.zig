@@ -2651,14 +2651,26 @@ pub inline fn createBlas(_vertexBuffer: VertexBufferHandle, _indexBuffer: IndexB
 }
 extern fn bgfx_create_blas(_vertexBuffer: VertexBufferHandle, _indexBuffer: IndexBufferHandle) AccelerationStructureHandle;
 
-/// Create a top-level acceleration structure (TLAS) with a single BLAS instance
-/// (identity transform).
+/// Create a top-level acceleration structure (TLAS) instancing one or more bottom-level
+/// acceleration structures. All instances start with the identity transform; use
+/// `updateTlas` to set per-instance transforms.
 /// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
-/// <param name="_blas">Bottom-level acceleration structure to instance.</param>
-pub inline fn createTlas(_blas: AccelerationStructureHandle) AccelerationStructureHandle {
-    return bgfx_create_tlas(_blas);
+/// <param name="_blases">Bottom-level acceleration structures, one per instance.</param>
+/// <param name="_num">Number of instances.</param>
+pub inline fn createTlas(_blases: [*c]const AccelerationStructureHandle, _num: u16) AccelerationStructureHandle {
+    return bgfx_create_tlas(_blases, _num);
 }
-extern fn bgfx_create_tlas(_blas: AccelerationStructureHandle) AccelerationStructureHandle;
+extern fn bgfx_create_tlas(_blases: [*c]const AccelerationStructureHandle, _num: u16) AccelerationStructureHandle;
+
+/// Update the per-instance transforms of a top-level acceleration structure and rebuild
+/// it in place.
+/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+/// <param name="_handle">Top-level acceleration structure handle.</param>
+/// <param name="_mem">One 4x4 matrix per instance (as produced by `bx::mtx*`), in `createTlas` order.</param>
+pub inline fn updateTlas(_handle: AccelerationStructureHandle, _mem: [*c]const Memory) void {
+    return bgfx_update_tlas(_handle, _mem);
+}
+extern fn bgfx_update_tlas(_handle: AccelerationStructureHandle, _mem: [*c]const Memory) void;
 
 /// Destroy acceleration structure.
 /// <param name="_handle">Acceleration structure handle.</param>

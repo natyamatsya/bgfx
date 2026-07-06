@@ -1081,6 +1081,7 @@ namespace bgfx
 			CreateVertexBuffer,
 			CreateBlas,
 			CreateTlas,
+			UpdateTlas,
 			CreateDynamicIndexBuffer,
 			UpdateDynamicIndexBuffer,
 			CreateDynamicVertexBuffer,
@@ -4573,7 +4574,8 @@ namespace bgfx
 		virtual void createVertexBuffer(VertexBufferHandle _handle, const Memory* _mem, VertexLayoutHandle _layoutHandle, uint16_t _flags) = 0;
 		virtual void destroyVertexBuffer(VertexBufferHandle _handle) = 0;
 		virtual void createBlas(AccelerationStructureHandle _handle, VertexBufferHandle _vertexBuffer, IndexBufferHandle _indexBuffer) = 0;
-		virtual void createTlas(AccelerationStructureHandle _handle, AccelerationStructureHandle _blas) = 0;
+		virtual void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) = 0;
+		virtual void updateTlas(AccelerationStructureHandle _handle, const Memory* _mem) = 0;
 		virtual void destroyAccelerationStructure(AccelerationStructureHandle _handle) = 0;
 		virtual void createDynamicIndexBuffer(IndexBufferHandle _handle, uint32_t _size, uint16_t _flags) = 0;
 		virtual void updateDynamicIndexBuffer(IndexBufferHandle _handle, uint32_t _offset, uint32_t _size, const Memory* _mem) = 0;
@@ -5056,7 +5058,7 @@ namespace bgfx
 			return handle;
 		}
 
-		BGFX_API_FUNC(AccelerationStructureHandle createTlas(AccelerationStructureHandle _blas) )
+		BGFX_API_FUNC(AccelerationStructureHandle createTlas(const AccelerationStructureHandle* _blases, uint16_t _num) )
 		{
 			BGFX_MUTEX_SCOPE(m_resourceApiLock);
 
@@ -5067,10 +5069,25 @@ namespace bgfx
 			{
 				CommandBuffer& cmdbuf = getCommandBuffer(CommandBuffer::CreateTlas);
 				cmdbuf.write(handle);
-				cmdbuf.write(_blas);
+				cmdbuf.write(_num);
+				for (uint16_t ii = 0; ii < _num; ++ii)
+				{
+					cmdbuf.write(_blases[ii]);
+				}
 			}
 
 			return handle;
+		}
+
+		BGFX_API_FUNC(void updateTlas(AccelerationStructureHandle _handle, const Memory* _mem) )
+		{
+			BGFX_MUTEX_SCOPE(m_resourceApiLock);
+
+			BGFX_CHECK_HANDLE("updateTlas", m_accelerationStructureHandle, _handle);
+
+			CommandBuffer& cmdbuf = getCommandBuffer(CommandBuffer::UpdateTlas);
+			cmdbuf.write(_handle);
+			cmdbuf.write(_mem);
 		}
 
 		BGFX_API_FUNC(void destroyAccelerationStructure(AccelerationStructureHandle _handle) )

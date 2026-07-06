@@ -3535,10 +3535,32 @@ namespace bgfx
 					AccelerationStructureHandle handle;
 					_cmdbuf.read(handle);
 
-					AccelerationStructureHandle blas;
-					_cmdbuf.read(blas);
+					uint16_t num;
+					_cmdbuf.read(num);
 
-					m_renderCtx->createTlas(handle, blas);
+					AccelerationStructureHandle blases[BGFX_CONFIG_MAX_TLAS_INSTANCES];
+					for (uint16_t ii = 0; ii < num; ++ii)
+					{
+						_cmdbuf.read(blases[ii]);
+					}
+
+					m_renderCtx->createTlas(handle, blases, num);
+				}
+				break;
+
+			case CommandBuffer::UpdateTlas:
+				{
+					BGFX_PROFILER_SCOPE("UpdateTlas", kColorResource);
+
+					AccelerationStructureHandle handle;
+					_cmdbuf.read(handle);
+
+					const Memory* mem;
+					_cmdbuf.read(mem);
+
+					m_renderCtx->updateTlas(handle, mem);
+
+					release(mem);
 				}
 				break;
 
@@ -4921,10 +4943,23 @@ namespace bgfx
 		return s_ctx->createBlas(_vertexBuffer, _indexBuffer);
 	}
 
-	AccelerationStructureHandle createTlas(AccelerationStructureHandle _blas)
+	AccelerationStructureHandle createTlas(const AccelerationStructureHandle* _blases, uint16_t _num)
 	{
 		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING, "Ray tracing is not supported!");
-		return s_ctx->createTlas(_blas);
+		BX_ASSERT(NULL != _blases, "_blases can't be NULL");
+		BX_ASSERT(0 < _num && _num <= BGFX_CONFIG_MAX_TLAS_INSTANCES
+			, "TLAS instance count %d is out of range [1, %d]."
+			, _num
+			, BGFX_CONFIG_MAX_TLAS_INSTANCES
+			);
+		return s_ctx->createTlas(_blases, _num);
+	}
+
+	void updateTlas(AccelerationStructureHandle _handle, const Memory* _mem)
+	{
+		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING, "Ray tracing is not supported!");
+		BX_ASSERT(NULL != _mem, "_mem can't be NULL");
+		s_ctx->updateTlas(_handle, _mem);
 	}
 
 	void destroy(AccelerationStructureHandle _handle)
