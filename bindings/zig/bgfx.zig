@@ -2732,13 +2732,15 @@ extern fn bgfx_update_tlas(_handle: AccelerationStructureHandle, _mem: [*c]const
 /// dimensions are the ray-grid size in RAYS (not workgroups).
 /// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING_PIPELINE`.
 /// <param name="_rayGen">Ray-generation shader.</param>
-/// <param name="_miss">Miss shader.</param>
-/// <param name="_closestHit">Closest-hit shader (triangle hit group).</param>
+/// <param name="_miss">Miss shaders; `TraceRay`'s MissShaderIndex selects among them.</param>
+/// <param name="_numMiss">Number of miss shaders.</param>
+/// <param name="_closestHit">Closest-hit shaders, one triangle hit group each.</param>
+/// <param name="_numHitGroups">Number of hit groups.</param>
 /// <param name="_destroyShaders">If true, shaders will be destroyed when program is destroyed.</param>
-pub inline fn createRtProgram(_rayGen: ShaderHandle, _miss: ShaderHandle, _closestHit: ShaderHandle, _destroyShaders: bool) ProgramHandle {
-    return bgfx_create_rt_program(_rayGen, _miss, _closestHit, _destroyShaders);
+pub inline fn createRtProgram(_rayGen: ShaderHandle, _miss: [*c]const ShaderHandle, _numMiss: u16, _closestHit: [*c]const ShaderHandle, _numHitGroups: u16, _destroyShaders: bool) ProgramHandle {
+    return bgfx_create_rt_program(_rayGen, _miss, _numMiss, _closestHit, _numHitGroups, _destroyShaders);
 }
-extern fn bgfx_create_rt_program(_rayGen: ShaderHandle, _miss: ShaderHandle, _closestHit: ShaderHandle, _destroyShaders: bool) ProgramHandle;
+extern fn bgfx_create_rt_program(_rayGen: ShaderHandle, _miss: [*c]const ShaderHandle, _numMiss: u16, _closestHit: [*c]const ShaderHandle, _numHitGroups: u16, _destroyShaders: bool) ProgramHandle;
 
 /// Destroy acceleration structure.
 /// <param name="_handle">Acceleration structure handle.</param>

@@ -2638,8 +2638,10 @@ namespace bgfx
 	/// dimensions are the ray-grid size in RAYS (not workgroups).
 	///
 	/// @param[in] _rayGen Ray-generation shader.
-	/// @param[in] _miss Miss shader.
-	/// @param[in] _closestHit Closest-hit shader (triangle hit group).
+	/// @param[in] _miss Miss shaders; `TraceRay`'s MissShaderIndex selects among them.
+	/// @param[in] _numMiss Number of miss shaders.
+	/// @param[in] _closestHit Closest-hit shaders, one triangle hit group each.
+	/// @param[in] _numHitGroups Number of hit groups.
 	/// @param[in] _destroyShaders If true, shaders will be destroyed when program is destroyed.
 	///
 	/// @returns Program handle.
@@ -2650,8 +2652,10 @@ namespace bgfx
 	///
 	ProgramHandle createRtProgram(
 		  ShaderHandle _rayGen
-		, ShaderHandle _miss
-		, ShaderHandle _closestHit
+		, const ShaderHandle* _miss
+		, uint16_t _numMiss
+		, const ShaderHandle* _closestHit
+		, uint16_t _numHitGroups
 		, bool _destroyShaders = false
 		);
 

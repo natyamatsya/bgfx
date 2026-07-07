@@ -3417,9 +3417,9 @@ namespace bgfx { namespace gl
 			BX_UNUSED(_handle);
 		}
 
-		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit) override
+		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, uint16_t _numHitGroups) override
 		{
-			BX_UNUSED(_handle, _rayGen, _miss, _closestHit);
+			BX_UNUSED(_handle, _rayGen, _miss, _numMiss, _closestHit, _numHitGroups);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override

@@ -133,7 +133,7 @@ namespace bgfx { namespace noop
 		{
 		}
 
-		void createRtProgram(ProgramHandle /*_handle*/, ShaderHandle /*_rayGen*/, ShaderHandle /*_miss*/, ShaderHandle /*_closestHit*/) override
+		void createRtProgram(ProgramHandle /*_handle*/, ShaderHandle /*_rayGen*/, const ShaderHandle* /*_miss*/, uint16_t /*_numMiss*/, const ShaderHandle* /*_closestHit*/, uint16_t /*_numHitGroups*/) override
 		{
 		}
 

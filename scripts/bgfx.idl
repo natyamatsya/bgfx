@@ -1607,11 +1607,13 @@ func.updateTlas { section = "Acceleration Structures" }
 --- dimensions are the ray-grid size in RAYS (not workgroups).
 --- @attention Availability depends on: `BGFX_CAPS_RAY_TRACING_PIPELINE`.
 func.createRtProgram { section = "Acceleration Structures" }
-	"ProgramHandle"                --- Program handle.
-	.rayGen        "ShaderHandle"  --- Ray-generation shader.
-	.miss          "ShaderHandle"  --- Miss shader.
-	.closestHit    "ShaderHandle"  --- Closest-hit shader (triangle hit group).
-	.destroyShaders "bool"         --- If true, shaders will be destroyed when program is destroyed.
+	"ProgramHandle"                       --- Program handle.
+	.rayGen        "ShaderHandle"         --- Ray-generation shader.
+	.miss          "const ShaderHandle*"  --- Miss shaders; `TraceRay`'s MissShaderIndex selects among them.
+	.numMiss       "uint16_t"             --- Number of miss shaders.
+	.closestHit    "const ShaderHandle*"  --- Closest-hit shaders, one triangle hit group each.
+	.numHitGroups  "uint16_t"             --- Number of hit groups.
+	.destroyShaders "bool"                --- If true, shaders will be destroyed when program is destroyed.
 	 { default = false }
 
 --- Destroy acceleration structure.

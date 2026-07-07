@@ -2583,11 +2583,13 @@ mixin(joinFnBinds((){
 		* Attention: Availability depends on: `BGFX_CAPS_RAY_TRACING_PIPELINE`.
 		Params:
 			rayGen = Ray-generation shader.
-			miss = Miss shader.
-			closestHit = Closest-hit shader (triangle hit group).
+			miss = Miss shaders; `TraceRay`'s MissShaderIndex selects among them.
+			numMiss = Number of miss shaders.
+			closestHit = Closest-hit shaders, one triangle hit group each.
+			numHitGroups = Number of hit groups.
 			destroyShaders = If true, shaders will be destroyed when program is destroyed.
 		*/
-		{q{ProgramHandle}, q{createRtProgram}, q{ShaderHandle rayGen, ShaderHandle miss, ShaderHandle closestHit, bool destroyShaders=false}, ext: `C++, "bgfx"`},
+		{q{ProgramHandle}, q{createRtProgram}, q{ShaderHandle rayGen, const(ShaderHandle)* miss, ushort numMiss, const(ShaderHandle)* closestHit, ushort numHitGroups, bool destroyShaders=false}, ext: `C++, "bgfx"`},
 		
 		/**
 		* Destroy acceleration structure.

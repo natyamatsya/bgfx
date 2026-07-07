@@ -2594,10 +2594,12 @@ extern fn void update_tlas(AccelerationStructureHandle _handle, Memory* _mem) @c
 // dimensions are the ray-grid size in RAYS (not workgroups).
 // @attention Availability depends on: `BGFX_CAPS_RAY_TRACING_PIPELINE`.
 // _rayGen : `Ray-generation shader.`
-// _miss : `Miss shader.`
-// _closestHit : `Closest-hit shader (triangle hit group).`
+// _miss : `Miss shaders; `TraceRay`'s MissShaderIndex selects among them.`
+// _numMiss : `Number of miss shaders.`
+// _closestHit : `Closest-hit shaders, one triangle hit group each.`
+// _numHitGroups : `Number of hit groups.`
 // _destroyShaders : `If true, shaders will be destroyed when program is destroyed.`
-extern fn ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit, bool _destroyShaders) @cname("bgfx_create_rt_program");
+extern fn ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle* _miss, ushort _numMiss, ShaderHandle* _closestHit, ushort _numHitGroups, bool _destroyShaders) @cname("bgfx_create_rt_program");
 
 // Destroy acceleration structure.
 // _handle : `Acceleration structure handle.`
