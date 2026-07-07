@@ -2626,7 +2626,10 @@ namespace bgfx
 	{
 		ShaderHandle m_vsh;
 		ShaderHandle m_fsh;
-		ShaderHandle m_xsh; // ray-tracing programs only: closest hit (m_vsh = raygen, m_fsh = miss)
+		// Ray-tracing programs only (m_vsh = raygen): miss shaders then hit groups.
+		ShaderHandle m_rtShaders[2*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+		uint8_t      m_numRtMiss;
+		uint8_t      m_numRtHit;
 		int16_t      m_refCount;
 	};
 
@@ -4591,7 +4594,7 @@ namespace bgfx
 		virtual void destroyVertexBuffer(VertexBufferHandle _handle) = 0;
 		virtual void createBlas(AccelerationStructureHandle _handle, const VertexBufferHandle* _vertexBuffers, const IndexBufferHandle* _indexBuffers, uint16_t _num) = 0;
 		virtual void updateBlas(AccelerationStructureHandle _handle) = 0;
-		virtual void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit) = 0;
+		virtual void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, uint16_t _numHitGroups) = 0;
 		virtual void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) = 0;
 		virtual void updateTlas(AccelerationStructureHandle _handle, const Memory* _mem) = 0;
 		virtual void destroyAccelerationStructure(AccelerationStructureHandle _handle) = 0;
@@ -6139,7 +6142,8 @@ namespace bgfx
 					pr.m_vsh = _vsh;
 					ShaderHandle fsh = BGFX_INVALID_HANDLE;
 					pr.m_fsh = fsh;
-					pr.m_xsh = BGFX_INVALID_HANDLE;
+					pr.m_numRtMiss = 0;
+					pr.m_numRtHit  = 0;
 					pr.m_refCount = 1;
 
 					const uint32_t key = uint32_t(_vsh.idx);
@@ -6161,17 +6165,17 @@ namespace bgfx
 			return handle;
 		}
 
-		BGFX_API_FUNC(ProgramHandle createRtProgram(ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit, bool _destroyShaders) )
+		BGFX_API_FUNC(ProgramHandle createRtProgram(ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, uint16_t _numHitGroups, bool _destroyShaders) )
 		{
 			BGFX_MUTEX_SCOPE(m_resourceApiLock);
 
-			if (!isValid(_rayGen) || !isValid(_miss) || !isValid(_closestHit) )
+			bool valid = isValid(_rayGen);
+			for (uint16_t ii = 0; ii < _numMiss; ++ii)        { valid &= isValid(_miss[ii]); }
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii)   { valid &= isValid(_closestHit[ii]); }
+
+			if (!valid)
 			{
-				BX_WARN(false, "Invalid ray-tracing program shaders (raygen %d, miss %d, closesthit %d)."
-					, _rayGen.idx
-					, _miss.idx
-					, _closestHit.idx
-					);
+				BX_WARN(false, "Invalid ray-tracing program shaders.");
 				return BGFX_INVALID_HANDLE;
 			}
 
@@ -6182,27 +6186,41 @@ namespace bgfx
 
 			if (isValid(handle) )
 			{
-				shaderIncRef(_rayGen);
-				shaderIncRef(_miss);
-				shaderIncRef(_closestHit);
 				ProgramRef& pr = m_programRef[handle.idx];
 				pr.m_vsh = _rayGen;
-				pr.m_fsh = _miss;
-				pr.m_xsh = _closestHit;
+				pr.m_fsh = BGFX_INVALID_HANDLE;
+				pr.m_numRtMiss = uint8_t(_numMiss);
+				pr.m_numRtHit  = uint8_t(_numHitGroups);
 				pr.m_refCount = 1;
+
+				shaderIncRef(_rayGen);
 
 				CommandBuffer& cmdbuf = getCommandBuffer(CommandBuffer::CreateRtProgram);
 				cmdbuf.write(handle);
 				cmdbuf.write(_rayGen);
-				cmdbuf.write(_miss);
-				cmdbuf.write(_closestHit);
+				cmdbuf.write(_numMiss);
+				cmdbuf.write(_numHitGroups);
+
+				for (uint16_t ii = 0; ii < _numMiss; ++ii)
+				{
+					shaderIncRef(_miss[ii]);
+					pr.m_rtShaders[ii] = _miss[ii];
+					cmdbuf.write(_miss[ii]);
+				}
+
+				for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
+				{
+					shaderIncRef(_closestHit[ii]);
+					pr.m_rtShaders[_numMiss + ii] = _closestHit[ii];
+					cmdbuf.write(_closestHit[ii]);
+				}
 			}
 
 			if (_destroyShaders)
 			{
 				shaderTakeOwnership(_rayGen);
-				shaderTakeOwnership(_miss);
-				shaderTakeOwnership(_closestHit);
+				for (uint16_t ii = 0; ii < _numMiss; ++ii)      { shaderTakeOwnership(_miss[ii]); }
+				for (uint16_t ii = 0; ii < _numHitGroups; ++ii) { shaderTakeOwnership(_closestHit[ii]); }
 			}
 
 			return handle;
@@ -6222,9 +6240,9 @@ namespace bgfx
 				shaderDecRef(pr.m_fsh);
 			}
 
-			if (isValid(pr.m_xsh) )
+			for (uint32_t ii = 0, num = uint32_t(pr.m_numRtMiss) + pr.m_numRtHit; ii < num; ++ii)
 			{
-				shaderDecRef(pr.m_xsh);
+				shaderDecRef(pr.m_rtShaders[ii]);
 			}
 
 			int32_t refs = --pr.m_refCount;

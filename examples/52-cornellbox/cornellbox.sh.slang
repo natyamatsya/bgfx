@@ -163,6 +163,20 @@ public void streamReservoir(inout Reservoir r, inout float wSum, Reservoir other
 	}
 }
 
+// Ray payloads of the RT-pipeline stage (types must match between TraceRay and the
+// receiving stages). The box rotation angle rides in the primary payload because
+// uniforms are only available to the raygen stage.
+public struct RtPipePayload
+{
+	public float3 color;
+	public float  angle;
+};
+
+public struct RtShadowPayload
+{
+	public float lit;
+};
+
 // Primary-hit info for the G-buffer / demodulation (denoiser stage).
 public struct Primary
 {

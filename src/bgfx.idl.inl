@@ -295,13 +295,11 @@ BGFX_C_API void bgfx_update_tlas(bgfx_acceleration_structure_handle_t _handle, c
 	bgfx::updateTlas(handle.cpp, (const bgfx::Memory*)_mem);
 }
 
-BGFX_C_API bgfx_program_handle_t bgfx_create_rt_program(bgfx_shader_handle_t _rayGen, bgfx_shader_handle_t _miss, bgfx_shader_handle_t _closestHit, bool _destroyShaders)
+BGFX_C_API bgfx_program_handle_t bgfx_create_rt_program(bgfx_shader_handle_t _rayGen, const bgfx_shader_handle_t* _miss, uint16_t _numMiss, const bgfx_shader_handle_t* _closestHit, uint16_t _numHitGroups, bool _destroyShaders)
 {
 	union { bgfx_shader_handle_t c; bgfx::ShaderHandle cpp; } rayGen = { _rayGen };
-	union { bgfx_shader_handle_t c; bgfx::ShaderHandle cpp; } miss = { _miss };
-	union { bgfx_shader_handle_t c; bgfx::ShaderHandle cpp; } closestHit = { _closestHit };
 	union { bgfx_program_handle_t c; bgfx::ProgramHandle cpp; } handle_ret;
-	handle_ret.cpp = bgfx::createRtProgram(rayGen.cpp, miss.cpp, closestHit.cpp, _destroyShaders);
+	handle_ret.cpp = bgfx::createRtProgram(rayGen.cpp, (const bgfx::ShaderHandle*)_miss, _numMiss, (const bgfx::ShaderHandle*)_closestHit, _numHitGroups, _destroyShaders);
 	return handle_ret.c;
 }
 

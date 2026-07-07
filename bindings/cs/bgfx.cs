@@ -3403,12 +3403,14 @@ public static partial class bgfx
 	/// </summary>
 	///
 	/// <param name="_rayGen">Ray-generation shader.</param>
-	/// <param name="_miss">Miss shader.</param>
-	/// <param name="_closestHit">Closest-hit shader (triangle hit group).</param>
+	/// <param name="_miss">Miss shaders; `TraceRay`'s MissShaderIndex selects among them.</param>
+	/// <param name="_numMiss">Number of miss shaders.</param>
+	/// <param name="_closestHit">Closest-hit shaders, one triangle hit group each.</param>
+	/// <param name="_numHitGroups">Number of hit groups.</param>
 	/// <param name="_destroyShaders">If true, shaders will be destroyed when program is destroyed.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_create_rt_program", CallingConvention = CallingConvention.Cdecl)]
-	public static extern unsafe ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit, bool _destroyShaders);
+	public static extern unsafe ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle* _miss, ushort _numMiss, ShaderHandle* _closestHit, ushort _numHitGroups, bool _destroyShaders);
 	
 	/// <summary>
 	/// Destroy acceleration structure.

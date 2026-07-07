@@ -3763,13 +3763,25 @@ namespace bgfx
 					ShaderHandle rayGen;
 					_cmdbuf.read(rayGen);
 
-					ShaderHandle miss;
-					_cmdbuf.read(miss);
+					uint16_t numMiss;
+					_cmdbuf.read(numMiss);
 
-					ShaderHandle closestHit;
-					_cmdbuf.read(closestHit);
+					uint16_t numHitGroups;
+					_cmdbuf.read(numHitGroups);
 
-					m_renderCtx->createRtProgram(handle, rayGen, miss, closestHit);
+					ShaderHandle miss[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+					for (uint16_t ii = 0; ii < numMiss; ++ii)
+					{
+						_cmdbuf.read(miss[ii]);
+					}
+
+					ShaderHandle closestHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+					for (uint16_t ii = 0; ii < numHitGroups; ++ii)
+					{
+						_cmdbuf.read(closestHit[ii]);
+					}
+
+					m_renderCtx->createRtProgram(handle, rayGen, miss, numMiss, closestHit, numHitGroups);
 				}
 				break;
 
@@ -5202,10 +5214,20 @@ namespace bgfx
 		s_ctx->setName(_handle, bx::StringView(_name, _len) );
 	}
 
-	ProgramHandle createRtProgram(ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit, bool _destroyShaders)
+	ProgramHandle createRtProgram(ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, uint16_t _numHitGroups, bool _destroyShaders)
 	{
 		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING_PIPELINE, "Ray tracing pipelines are not supported!");
-		return s_ctx->createRtProgram(_rayGen, _miss, _closestHit, _destroyShaders);
+		BX_ASSERT(0 < _numMiss && _numMiss <= BGFX_CONFIG_MAX_RT_SHADER_GROUPS
+			, "Miss shader count %d is out of range [1, %d]."
+			, _numMiss
+			, BGFX_CONFIG_MAX_RT_SHADER_GROUPS
+			);
+		BX_ASSERT(0 < _numHitGroups && _numHitGroups <= BGFX_CONFIG_MAX_RT_SHADER_GROUPS
+			, "Hit group count %d is out of range [1, %d]."
+			, _numHitGroups
+			, BGFX_CONFIG_MAX_RT_SHADER_GROUPS
+			);
+		return s_ctx->createRtProgram(_rayGen, _miss, _numMiss, _closestHit, _numHitGroups, _destroyShaders);
 	}
 
 	void destroy(ShaderHandle _handle)

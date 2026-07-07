@@ -2918,9 +2918,14 @@ VK_IMPORT_DEVICE
 			m_accelerationStructures[_handle.idx].updateBlas(m_commandBuffer);
 		}
 
-		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, ShaderHandle _miss, ShaderHandle _closestHit) override
+		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, uint16_t _numHitGroups) override
 		{
-			m_program[_handle.idx].createRt(&m_shaders[_rayGen.idx], &m_shaders[_miss.idx], &m_shaders[_closestHit.idx]);
+			const ShaderVK* miss[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+			const ShaderVK* hit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+			for (uint16_t ii = 0; ii < _numMiss; ++ii)      { miss[ii] = &m_shaders[_miss[ii].idx]; }
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii) { hit[ii]  = &m_shaders[_closestHit[ii].idx]; }
+
+			m_program[_handle.idx].createRt(&m_shaders[_rayGen.idx], miss, _numMiss, hit, _numHitGroups);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
@@ -4327,15 +4332,21 @@ VK_IMPORT_DEVICE
 
 		// Ray-tracing pipeline (raygen + miss + triangle closest-hit group) + its shader
 		// binding table. The SBT lives on the program and is built once, here.
+		// Ray-tracing pipeline (raygen + N miss + N triangle hit groups) + its shader
+		// binding table. The SBT lives on the program and is built once, here.
 		VkPipeline getRtPipeline(ProgramHandle _program)
 		{
 			ProgramVK& program = m_program[_program.idx];
 
+			const uint32_t numMiss = program.m_numRtMiss;
+			const uint32_t numHit  = program.m_numRtHit;
+			const uint32_t numStages = 1 + numMiss + numHit;
+
 			bx::HashMurmur2A murmur;
 			murmur.begin();
 			murmur.add(program.m_vsh->m_hash);
-			murmur.add(program.m_missSh->m_hash);
-			murmur.add(program.m_chitSh->m_hash);
+			for (uint32_t ii = 0; ii < numMiss; ++ii) { murmur.add(program.m_rtMiss[ii]->m_hash); }
+			for (uint32_t ii = 0; ii < numHit;  ++ii) { murmur.add(program.m_rtHit[ii]->m_hash); }
 			murmur.add(uint32_t(0x52545054) ); // 'RTPT': keep distinct from compute hashes
 			const uint32_t hash = murmur.end();
 
@@ -4343,28 +4354,26 @@ VK_IMPORT_DEVICE
 
 			if (VK_NULL_HANDLE == pipeline)
 			{
-				VkPipelineShaderStageCreateInfo stages[3];
-				const ShaderVK* shaders[3] = { program.m_vsh, program.m_missSh, program.m_chitSh };
-				const VkShaderStageFlagBits stageBits[3] =
+				VkPipelineShaderStageCreateInfo stages[1 + 2*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+				VkRayTracingShaderGroupCreateInfoKHR groups[1 + 2*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+
+				for (uint32_t ii = 0; ii < numStages; ++ii)
 				{
-					VK_SHADER_STAGE_RAYGEN_BIT_KHR,
-					VK_SHADER_STAGE_MISS_BIT_KHR,
-					VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
-				};
-				for (uint32_t ii = 0; ii < 3; ++ii)
-				{
+					const ShaderVK* shader = ii == 0 ? program.m_vsh
+						: ii <= numMiss                ? program.m_rtMiss[ii - 1]
+						:                                program.m_rtHit[ii - 1 - numMiss]
+						;
 					stages[ii].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 					stages[ii].pNext  = NULL;
 					stages[ii].flags  = 0;
-					stages[ii].stage  = stageBits[ii];
-					stages[ii].module = shaders[ii]->m_module;
+					stages[ii].stage  = ii == 0 ? VK_SHADER_STAGE_RAYGEN_BIT_KHR
+						: ii <= numMiss ? VK_SHADER_STAGE_MISS_BIT_KHR
+						:                 VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
+						;
+					stages[ii].module = shader->m_module;
 					stages[ii].pName  = "main";
 					stages[ii].pSpecializationInfo = NULL;
-				}
 
-				VkRayTracingShaderGroupCreateInfoKHR groups[3];
-				for (uint32_t ii = 0; ii < 3; ++ii)
-				{
 					groups[ii].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
 					groups[ii].pNext = NULL;
 					groups[ii].generalShader      = VK_SHADER_UNUSED_KHR;
@@ -4372,23 +4381,29 @@ VK_IMPORT_DEVICE
 					groups[ii].anyHitShader       = VK_SHADER_UNUSED_KHR;
 					groups[ii].intersectionShader = VK_SHADER_UNUSED_KHR;
 					groups[ii].pShaderGroupCaptureReplayHandle = NULL;
+
+					if (ii <= numMiss)
+					{
+						groups[ii].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+						groups[ii].generalShader = ii;
+					}
+					else
+					{
+						groups[ii].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+						groups[ii].closestHitShader = ii;
+					}
 				}
-				groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-				groups[0].generalShader = 0; // raygen
-				groups[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-				groups[1].generalShader = 1; // miss
-				groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-				groups[2].closestHitShader = 2;
 
 				VkRayTracingPipelineCreateInfoKHR rtpci;
 				rtpci.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
 				rtpci.pNext = NULL;
 				rtpci.flags = 0;
-				rtpci.stageCount = 3;
+				rtpci.stageCount = numStages;
 				rtpci.pStages    = stages;
-				rtpci.groupCount = 3;
+				rtpci.groupCount = numStages;
 				rtpci.pGroups    = groups;
-				rtpci.maxPipelineRayRecursionDepth = 1;
+				// Depth 2 permits one TraceRay from a hit shader (e.g. a shadow ray).
+				rtpci.maxPipelineRayRecursionDepth = bx::min(2u, m_rayTracingPipelineProps.maxRayRecursionDepth);
 				rtpci.pLibraryInfo      = NULL;
 				rtpci.pLibraryInterface = NULL;
 				rtpci.pDynamicState     = NULL;
@@ -4403,36 +4418,46 @@ VK_IMPORT_DEVICE
 
 			if (VK_NULL_HANDLE == program.m_sbtBuffer)
 			{
-				// One SBT region per group, each starting at shaderGroupBaseAlignment; the
-				// raygen region's size must equal its stride.
+				// One SBT region per group KIND, each starting at shaderGroupBaseAlignment
+				// and holding its groups' handles at handle stride; the raygen region's
+				// size must equal its stride.
 				const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& props = m_rayTracingPipelineProps;
-				const uint32_t handleSize    = props.shaderGroupHandleSize;
-				const uint32_t handleStride  = bx::alignUp(handleSize, props.shaderGroupHandleAlignment);
-				const uint32_t regionStride  = bx::alignUp(handleStride, props.shaderGroupBaseAlignment);
+				const uint32_t handleSize   = props.shaderGroupHandleSize;
+				const uint32_t handleStride = bx::alignUp(handleSize, props.shaderGroupHandleAlignment);
 
-				createRtBuffer(3*regionStride
+				const uint32_t rayGenSize = bx::alignUp(handleStride, props.shaderGroupBaseAlignment);
+				const uint32_t missSize   = bx::alignUp(numMiss*handleStride, props.shaderGroupBaseAlignment);
+				const uint32_t hitSize    = bx::alignUp(numHit*handleStride, props.shaderGroupBaseAlignment);
+
+				createRtBuffer(rayGenSize + missSize + hitSize
 					, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR
 					, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
 					, program.m_sbtBuffer
 					, program.m_sbtMem
 					);
 
-				uint8_t handles[3*64];
+				uint8_t handles[(1 + 2*BGFX_CONFIG_MAX_RT_SHADER_GROUPS)*64];
 				BX_ASSERT(handleSize <= 64, "Unexpected shader group handle size %d.", handleSize);
-				VK_CHECK(vkGetRayTracingShaderGroupHandlesKHR(m_device, pipeline, 0, 3, 3*handleSize, handles) );
+				VK_CHECK(vkGetRayTracingShaderGroupHandlesKHR(m_device, pipeline, 0, numStages, numStages*handleSize, handles) );
 
 				void* mapped;
-				VK_CHECK(vkMapMemory(m_device, program.m_sbtMem, 0, 3*regionStride, 0, &mapped) );
-				for (uint32_t ii = 0; ii < 3; ++ii)
+				VK_CHECK(vkMapMemory(m_device, program.m_sbtMem, 0, rayGenSize + missSize + hitSize, 0, &mapped) );
+				uint8_t* out = (uint8_t*)mapped;
+				bx::memCopy(out, handles, handleSize); // raygen
+				for (uint32_t ii = 0; ii < numMiss; ++ii)
 				{
-					bx::memCopy( (uint8_t*)mapped + ii*regionStride, handles + ii*handleSize, handleSize);
+					bx::memCopy(out + rayGenSize + ii*handleStride, handles + (1 + ii)*handleSize, handleSize);
+				}
+				for (uint32_t ii = 0; ii < numHit; ++ii)
+				{
+					bx::memCopy(out + rayGenSize + missSize + ii*handleStride, handles + (1 + numMiss + ii)*handleSize, handleSize);
 				}
 				vkUnmapMemory(m_device, program.m_sbtMem);
 
 				const VkDeviceAddress base = getBufferDeviceAddress(program.m_sbtBuffer);
-				program.m_sbtRayGen   = { base + 0*regionStride, handleStride, handleStride };
-				program.m_sbtMiss     = { base + 1*regionStride, handleStride, handleStride };
-				program.m_sbtHit      = { base + 2*regionStride, handleStride, handleStride };
+				program.m_sbtRayGen   = { base, handleStride, handleStride };
+				program.m_sbtMiss     = { base + rayGenSize, handleStride, numMiss*handleStride };
+				program.m_sbtHit      = { base + rayGenSize + missSize, handleStride, numHit*handleStride };
 				program.m_sbtCallable = { 0, 0, 0 };
 			}
 
@@ -6847,14 +6872,127 @@ VK_DESTROY
 		}
 	}
 
-	void ProgramVK::createRt(const ShaderVK* _rayGen, const ShaderVK* _miss, const ShaderVK* _closestHit)
+	void ProgramVK::createRt(const ShaderVK* _rayGen, const ShaderVK* const* _miss, uint16_t _numMiss, const ShaderVK* const* _hit, uint16_t _numHit)
 	{
-		// The descriptor-set layout comes from the raygen stage alone: in this first
-		// version every resource the pipeline accesses must be declared in the raygen
-		// shader (miss/closest-hit communicate through the ray payload).
-		create(_rayGen, NULL);
-		m_missSh = _miss;
-		m_chitSh = _closestHit;
+		// Resources (buffers, images, acceleration structures) may be declared in ANY
+		// stage: the descriptor-set layout is the dedup-by-binding union of every stage's
+		// bindings with their stage flags OR-ed. Uniforms (the constant buffer + predefined
+		// uniforms) still come from the raygen stage alone -- it drives the shared compute
+		// uniform path (m_vsh).
+		m_vsh = _rayGen;
+		bx::memCopy(&m_predefined[0], _rayGen->m_predefined, _rayGen->m_numPredefined * sizeof(PredefinedUniform) );
+		m_numPredefined = _rayGen->m_numPredefined;
+
+		m_numRtMiss = uint8_t(_numMiss);
+		m_numRtHit  = uint8_t(_numHit);
+
+		const ShaderVK* shaders[1 + 2*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+		uint16_t numShaders = 0;
+		shaders[numShaders++] = _rayGen;
+		for (uint16_t ii = 0; ii < _numMiss; ++ii)
+		{
+			m_rtMiss[ii] = _miss[ii];
+			shaders[numShaders++] = _miss[ii];
+		}
+		for (uint16_t ii = 0; ii < _numHit; ++ii)
+		{
+			m_rtHit[ii] = _hit[ii];
+			shaders[numShaders++] = _hit[ii];
+		}
+
+		// Bind-info/texture merge across all stages (first declaration wins per stage slot).
+		m_numTextures = 0;
+		for (uint8_t stage = 0; stage < BX_COUNTOF(m_bindInfo); ++stage)
+		{
+			for (uint16_t ii = 0; ii < numShaders; ++ii)
+			{
+				const ShaderVK* shader = shaders[ii];
+				if (isValid(shader->m_bindInfo[stage].uniformHandle) )
+				{
+					m_bindInfo[stage] = shader->m_bindInfo[stage];
+					uint32_t& index = m_bindInfo[stage].index;
+					if (UINT32_MAX != index)
+					{
+						m_textures[m_numTextures] = shader->m_textures[index];
+						index = m_numTextures;
+						m_numTextures++;
+					}
+					break;
+				}
+			}
+		}
+
+		// Descriptor-set layout: union of every stage's bindings, deduped by binding
+		// number with the stage flags OR-ed.
+		VkDescriptorSetLayoutBinding bindings[(1 + 2*BGFX_CONFIG_MAX_RT_SHADER_GROUPS) * BX_COUNTOF(ShaderVK::m_bindings)];
+		uint32_t numBindings = 0;
+		for (uint16_t ii = 0; ii < numShaders; ++ii)
+		{
+			const ShaderVK* shader = shaders[ii];
+			for (uint16_t jj = 0; jj < shader->m_numBindings; ++jj)
+			{
+				const VkDescriptorSetLayoutBinding& in = shader->m_bindings[jj];
+				uint32_t existing = UINT32_MAX;
+				for (uint32_t kk = 0; kk < numBindings; ++kk)
+				{
+					if (bindings[kk].binding == in.binding)
+					{
+						existing = kk;
+						break;
+					}
+				}
+
+				if (UINT32_MAX != existing)
+				{
+					BX_ASSERT(bindings[existing].descriptorType == in.descriptorType
+						, "Mismatching descriptor types on shared ray-tracing binding %d."
+						, in.binding
+						);
+					bindings[existing].stageFlags |= in.stageFlags;
+				}
+				else
+				{
+					bindings[numBindings] = in;
+					numBindings++;
+				}
+			}
+		}
+
+		m_descriptorSetLayout = VK_NULL_HANDLE;
+		if (0 < numBindings)
+		{
+			bx::HashMurmur2A murmur;
+			murmur.begin();
+			murmur.add(bindings, sizeof(VkDescriptorSetLayoutBinding) * numBindings);
+			const uint32_t descriptorSetLayoutHash = murmur.end();
+
+			m_descriptorSetLayout = s_renderVK->m_descriptorSetLayoutCache.find(descriptorSetLayoutHash);
+
+			if (VK_NULL_HANDLE == m_descriptorSetLayout)
+			{
+				VkDescriptorSetLayoutCreateInfo dslci;
+				dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+				dslci.pNext = NULL;
+				dslci.flags = 0;
+				dslci.bindingCount = numBindings;
+				dslci.pBindings = bindings;
+
+				VK_CHECK(vkCreateDescriptorSetLayout(s_renderVK->m_device, &dslci, s_renderVK->m_allocatorCb, &m_descriptorSetLayout) );
+
+				s_renderVK->m_descriptorSetLayoutCache.add(descriptorSetLayoutHash, m_descriptorSetLayout);
+			}
+		}
+
+		VkPipelineLayoutCreateInfo plci;
+		plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+		plci.pNext = NULL;
+		plci.flags = 0;
+		plci.pushConstantRangeCount = 0;
+		plci.pPushConstantRanges = NULL;
+		plci.setLayoutCount = (m_descriptorSetLayout == VK_NULL_HANDLE ? 0 : 1);
+		plci.pSetLayouts = &m_descriptorSetLayout;
+
+		VK_CHECK(vkCreatePipelineLayout(s_renderVK->m_device, &plci, s_renderVK->m_allocatorCb, &m_pipelineLayout) );
 	}
 
 	void ProgramVK::create(const ShaderVK* _vsh, const ShaderVK* _fsh)
@@ -7027,8 +7165,8 @@ VK_DESTROY
 			m_sbtBuffer = VK_NULL_HANDLE;
 			m_sbtMem = VK_NULL_HANDLE;
 		}
-		m_missSh = NULL;
-		m_chitSh = NULL;
+		m_numRtMiss = 0;
+		m_numRtHit = 0;
 
 		// Pipeline layouts are owned by s_renderVK->m_pipelineLayoutCache since
 		// upstream's lifetime fix -- drop the handle, don't release it here.
