@@ -157,11 +157,13 @@ back to the analytic compute shader otherwise.
   All validated on Metal (on-device) and Vulkan (lavapipe), `tools/rt-validation/`.
 - The RT *pipeline* v1 is DONE (Vulkan-only, lavapipe-verified): `createRtProgram(raygen,
   miss, closestHit)` + `bgfx::dispatch` (ray-grid in rays) with the SBT built at pipeline
-  creation; new `BGFX_CAPS_RAY_TRACING_PIPELINE` cap. Current limits: fixed 3-stage shape
-  (one triangle hit group), recursion depth 1, all resources declared in the raygen stage.
-  Next steps there: multiple miss/hit groups, callables, deeper recursion — and a Metal
-  path, which cannot come from SPIRV-Cross (no MSL for RT pipeline stages) and would
-  instead map onto Metal intersection function tables.
+  creation; new `BGFX_CAPS_RAY_TRACING_PIPELINE` cap. v2 (also lavapipe-verified): resources may be
+  declared in ANY stage (the descriptor-set layout is the dedup-by-binding union with
+  stage flags OR-ed), multiple miss shaders and triangle hit groups, recursion depth 2
+  (a shadow/secondary ray from a hit shader). Uniforms still come from the raygen stage.
+  Remaining: callables, anyhit/intersection stages, deeper recursion — and a Metal path,
+  which cannot come from SPIRV-Cross (no MSL for RT pipeline stages) and would instead
+  map onto Metal intersection function tables, likely via Slang's native MSL backend.
 
 ## 10. Risks
 
