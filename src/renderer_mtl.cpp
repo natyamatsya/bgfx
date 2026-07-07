@@ -1349,6 +1349,7 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				geometry.m_vertexStride = stride;
 				geometry.m_numTriangles = (ib.m_size / (index32 ? 4 : 2) ) / 3;
 				geometry.m_index32      = index32;
+				geometry.m_isAabbs      = false;
 			}
 
 			m_accelerationStructures[_handle.idx].createBlas(
@@ -1364,15 +1365,41 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			endEncoding();
 		}
 
+		void createBlasAabbs(AccelerationStructureHandle _handle, const VertexBufferHandle* _aabbBuffers, uint16_t _num) override
+		{
+			AccelerationStructureMtl::Geometry geometries[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+			for (uint16_t ii = 0; ii < _num; ++ii)
+			{
+				const VertexBufferMtl& vb = m_vertexBuffers[_aabbBuffers[ii].idx];
+
+				AccelerationStructureMtl::Geometry& geometry = geometries[ii];
+				geometry.m_isAabbs      = true;
+				geometry.m_vertexBuffer = vb.m_ptr;
+				geometry.m_indexBuffer  = NULL;
+				geometry.m_vertexStride = 24;
+				geometry.m_numTriangles = vb.m_size / 24; // AABB count
+				geometry.m_index32      = false;
+			}
+
+			m_accelerationStructures[_handle.idx].createBlas(
+				  m_device
+				, getAccelerationStructureCommandEncoder()
+				, geometries
+				, _num
+				);
+
+			endEncoding();
+		}
+
 		void updateBlas(AccelerationStructureHandle _handle) override
 		{
 			m_accelerationStructures[_handle.idx].updateBlas(getAccelerationStructureCommandEncoder() );
 			endEncoding();
 		}
 
-		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) override
+		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, const ShaderHandle* _intersection, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) override
 		{
-			BX_UNUSED(_handle, _rayGen, _miss, _numMiss, _closestHit, _anyHit, _numHitGroups, _callable, _numCallables);
+			BX_UNUSED(_handle, _rayGen, _miss, _numMiss, _closestHit, _anyHit, _intersection, _numHitGroups, _callable, _numCallables);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
@@ -3766,6 +3793,20 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		for (uint16_t ii = 0; ii < _num; ++ii)
 		{
 			const Geometry& src = _geometries[ii];
+
+			if (src.m_isAabbs)
+			{
+				// Procedural geometry: bounding boxes; hits are reported by an
+				// intersection function (ray query must handle bounding-box candidates).
+				MTL::AccelerationStructureBoundingBoxGeometryDescriptor* boxGeo = MTL::AccelerationStructureBoundingBoxGeometryDescriptor::alloc()->init();
+				boxGeo->setOpaque(true);
+				boxGeo->setBoundingBoxBuffer(src.m_vertexBuffer);
+				boxGeo->setBoundingBoxBufferOffset(0);
+				boxGeo->setBoundingBoxStride(24);
+				boxGeo->setBoundingBoxCount(src.m_numTriangles);
+				geoDescs[ii] = boxGeo;
+				continue;
+			}
 
 			MTL::AccelerationStructureTriangleGeometryDescriptor* triGeo = MTL::AccelerationStructureTriangleGeometryDescriptor::alloc()->init();
 			triGeo->setOpaque(true);

@@ -2891,7 +2891,28 @@ VK_IMPORT_DEVICE
 				geometry.m_vertexStride  = stride;
 				geometry.m_numVertices   = stride > 0 ? vb.m_size / stride : 0;
 				geometry.m_numTriangles  = (ib.m_size / (index32 ? 4 : 2) ) / 3;
+				geometry.m_isAabbs = false;
 				geometry.m_indexType     = index32 ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+			}
+
+			m_accelerationStructures[_handle.idx].createBlas(m_commandBuffer, geometries, _num);
+		}
+
+		void createBlasAabbs(AccelerationStructureHandle _handle, const VertexBufferHandle* _aabbBuffers, uint16_t _num) override
+		{
+			AccelerationStructureVK::Geometry geometries[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+			for (uint16_t ii = 0; ii < _num; ++ii)
+			{
+				const VertexBufferVK& vb = m_vertexBuffers[_aabbBuffers[ii].idx];
+
+				AccelerationStructureVK::Geometry& geometry = geometries[ii];
+				geometry.m_isAabbs       = true;
+				geometry.m_vertexAddress = getBufferDeviceAddress(vb.m_buffer);
+				geometry.m_indexAddress  = 0;
+				geometry.m_vertexStride  = sizeof(VkAabbPositionsKHR);
+				geometry.m_numVertices   = 0;
+				geometry.m_numTriangles  = vb.m_size / sizeof(VkAabbPositionsKHR); // AABB count
+				geometry.m_indexType     = VK_INDEX_TYPE_NONE_KHR;
 			}
 
 			m_accelerationStructures[_handle.idx].createBlas(m_commandBuffer, geometries, _num);
@@ -2902,18 +2923,20 @@ VK_IMPORT_DEVICE
 			m_accelerationStructures[_handle.idx].updateBlas(m_commandBuffer);
 		}
 
-		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) override
+		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, const ShaderHandle* _intersection, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) override
 		{
 			const ShaderVK* miss[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 			const ShaderVK* hit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 			const ShaderVK* anyHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+			const ShaderVK* intersection[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 			const ShaderVK* callable[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
-			for (uint16_t ii = 0; ii < _numMiss; ++ii)      { miss[ii]     = &m_shaders[_miss[ii].idx]; }
-			for (uint16_t ii = 0; ii < _numHitGroups; ++ii) { hit[ii]      = &m_shaders[_closestHit[ii].idx]; }
-			for (uint16_t ii = 0; ii < _numHitGroups; ++ii) { anyHit[ii]   = isValid(_anyHit[ii]) ? &m_shaders[_anyHit[ii].idx] : NULL; }
-			for (uint16_t ii = 0; ii < _numCallables; ++ii) { callable[ii] = &m_shaders[_callable[ii].idx]; }
+			for (uint16_t ii = 0; ii < _numMiss; ++ii)      { miss[ii]         = &m_shaders[_miss[ii].idx]; }
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii) { hit[ii]          = &m_shaders[_closestHit[ii].idx]; }
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii) { anyHit[ii]       = isValid(_anyHit[ii]) ? &m_shaders[_anyHit[ii].idx] : NULL; }
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii) { intersection[ii] = isValid(_intersection[ii]) ? &m_shaders[_intersection[ii].idx] : NULL; }
+			for (uint16_t ii = 0; ii < _numCallables; ++ii) { callable[ii]     = &m_shaders[_callable[ii].idx]; }
 
-			m_program[_handle.idx].createRt(&m_shaders[_rayGen.idx], miss, _numMiss, hit, anyHit, _numHitGroups, callable, _numCallables);
+			m_program[_handle.idx].createRt(&m_shaders[_rayGen.idx], miss, _numMiss, hit, anyHit, intersection, _numHitGroups, callable, _numCallables);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
@@ -4340,6 +4363,7 @@ VK_IMPORT_DEVICE
 			for (uint32_t ii = 0; ii < numMiss; ++ii)     { murmur.add(program.m_rtMiss[ii]->m_hash); }
 			for (uint32_t ii = 0; ii < numHit;  ++ii)     { murmur.add(program.m_rtHit[ii]->m_hash); }
 			for (uint32_t ii = 0; ii < numHit;  ++ii)     { murmur.add(NULL != program.m_rtAnyHit[ii] ? program.m_rtAnyHit[ii]->m_hash : 0u); }
+			for (uint32_t ii = 0; ii < numHit;  ++ii)     { murmur.add(NULL != program.m_rtIntersection[ii] ? program.m_rtIntersection[ii]->m_hash : 0u); }
 			for (uint32_t ii = 0; ii < numCallable; ++ii) { murmur.add(program.m_rtCallable[ii]->m_hash); }
 			murmur.add(uint32_t(0x52545054) ); // 'RTPT': keep distinct from compute hashes
 			const uint32_t hash = murmur.end();
@@ -4350,12 +4374,12 @@ VK_IMPORT_DEVICE
 			{
 				// Stage list: raygen, miss..., closest-hit..., any-hit (present ones only),
 				// callables. Groups reference stages by index.
-				VkPipelineShaderStageCreateInfo stages[1 + 4*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+				VkPipelineShaderStageCreateInfo stages[1 + 5*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 				VkRayTracingShaderGroupCreateInfoKHR groups[1 + 3*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 				uint32_t numStages = 0;
 
-				const ShaderVK* stageShaders[1 + 4*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
-				VkShaderStageFlagBits stageBits[1 + 4*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+				const ShaderVK* stageShaders[1 + 5*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+				VkShaderStageFlagBits stageBits[1 + 5*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 
 				stageShaders[numStages] = program.m_vsh;
 				stageBits[numStages++]  = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
@@ -4379,6 +4403,17 @@ VK_IMPORT_DEVICE
 						anyHitStage[ii] = numStages;
 						stageShaders[numStages] = program.m_rtAnyHit[ii];
 						stageBits[numStages++]  = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+					}
+				}
+				uint32_t intersectionStage[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+				for (uint32_t ii = 0; ii < numHit; ++ii)
+				{
+					intersectionStage[ii] = VK_SHADER_UNUSED_KHR;
+					if (NULL != program.m_rtIntersection[ii])
+					{
+						intersectionStage[ii] = numStages;
+						stageShaders[numStages] = program.m_rtIntersection[ii];
+						stageBits[numStages++]  = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
 					}
 				}
 				const uint32_t firstCallableStage = numStages;
@@ -4418,9 +4453,13 @@ VK_IMPORT_DEVICE
 				for (uint32_t ii = 0; ii < numHit; ++ii)
 				{
 					VkRayTracingShaderGroupCreateInfoKHR& group = groups[1 + numMiss + ii];
-					group.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-					group.closestHitShader = firstHitStage + ii;
-					group.anyHitShader     = anyHitStage[ii];
+					group.type = VK_SHADER_UNUSED_KHR != intersectionStage[ii]
+						? VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR
+						: VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR
+						;
+					group.closestHitShader   = firstHitStage + ii;
+					group.anyHitShader       = anyHitStage[ii];
+					group.intersectionShader = intersectionStage[ii];
 				}
 				for (uint32_t ii = 0; ii < numCallable; ++ii)
 				{
@@ -6161,17 +6200,29 @@ VK_DESTROY
 			VkAccelerationStructureGeometryKHR& geometry = geometries[ii];
 			geometry.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
 			geometry.pNext        = NULL;
-			geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
 			geometry.flags        = VK_GEOMETRY_OPAQUE_BIT_KHR;
-			geometry.geometry.triangles.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-			geometry.geometry.triangles.pNext         = NULL;
-			geometry.geometry.triangles.vertexFormat  = VK_FORMAT_R32G32B32_SFLOAT;
-			geometry.geometry.triangles.vertexData.deviceAddress = src.m_vertexAddress;
-			geometry.geometry.triangles.vertexStride  = src.m_vertexStride;
-			geometry.geometry.triangles.maxVertex     = src.m_numVertices > 0 ? src.m_numVertices - 1 : 0;
-			geometry.geometry.triangles.indexType     = src.m_indexType;
-			geometry.geometry.triangles.indexData.deviceAddress     = src.m_indexAddress;
-			geometry.geometry.triangles.transformData.deviceAddress = 0;
+
+			if (src.m_isAabbs)
+			{
+				geometry.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
+				geometry.geometry.aabbs.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+				geometry.geometry.aabbs.pNext  = NULL;
+				geometry.geometry.aabbs.data.deviceAddress = src.m_vertexAddress;
+				geometry.geometry.aabbs.stride = sizeof(VkAabbPositionsKHR);
+			}
+			else
+			{
+				geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+				geometry.geometry.triangles.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+				geometry.geometry.triangles.pNext         = NULL;
+				geometry.geometry.triangles.vertexFormat  = VK_FORMAT_R32G32B32_SFLOAT;
+				geometry.geometry.triangles.vertexData.deviceAddress = src.m_vertexAddress;
+				geometry.geometry.triangles.vertexStride  = src.m_vertexStride;
+				geometry.geometry.triangles.maxVertex     = src.m_numVertices > 0 ? src.m_numVertices - 1 : 0;
+				geometry.geometry.triangles.indexType     = src.m_indexType;
+				geometry.geometry.triangles.indexData.deviceAddress     = src.m_indexAddress;
+				geometry.geometry.triangles.transformData.deviceAddress = 0;
+			}
 
 			primitiveCounts[ii] = src.m_numTriangles;
 
@@ -6902,7 +6953,7 @@ VK_DESTROY
 		}
 	}
 
-	void ProgramVK::createRt(const ShaderVK* _rayGen, const ShaderVK* const* _miss, uint16_t _numMiss, const ShaderVK* const* _hit, const ShaderVK* const* _anyHit, uint16_t _numHit, const ShaderVK* const* _callable, uint16_t _numCallable)
+	void ProgramVK::createRt(const ShaderVK* _rayGen, const ShaderVK* const* _miss, uint16_t _numMiss, const ShaderVK* const* _hit, const ShaderVK* const* _anyHit, const ShaderVK* const* _intersection, uint16_t _numHit, const ShaderVK* const* _callable, uint16_t _numCallable)
 	{
 		// Resources (buffers, images, acceleration structures) may be declared in ANY
 		// stage: the descriptor-set layout is the dedup-by-binding union of every stage's
@@ -6917,7 +6968,7 @@ VK_DESTROY
 		m_numRtHit      = uint8_t(_numHit);
 		m_numRtCallable = uint8_t(_numCallable);
 
-		const ShaderVK* shaders[1 + 4*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+		const ShaderVK* shaders[1 + 5*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 		uint16_t numShaders = 0;
 		shaders[numShaders++] = _rayGen;
 		for (uint16_t ii = 0; ii < _numMiss; ++ii)
@@ -6938,16 +6989,27 @@ VK_DESTROY
 				shaders[numShaders++] = _anyHit[ii];
 			}
 		}
+		for (uint16_t ii = 0; ii < _numHit; ++ii)
+		{
+			m_rtIntersection[ii] = _intersection[ii];
+			if (NULL != _intersection[ii])
+			{
+				shaders[numShaders++] = _intersection[ii];
+			}
+		}
 		for (uint16_t ii = 0; ii < _numCallable; ++ii)
 		{
 			m_rtCallable[ii] = _callable[ii];
 			shaders[numShaders++] = _callable[ii];
 		}
 
-		// Bind-info/texture merge across all stages (first declaration wins per stage slot).
+		// Bind-info/texture merge across all stages (first declaration wins per stage
+		// slot). Reset first: ProgramVK slots are recycled and a stale entry from the
+		// previous occupant would otherwise survive on stages no shader declares.
 		m_numTextures = 0;
 		for (uint8_t stage = 0; stage < BX_COUNTOF(m_bindInfo); ++stage)
 		{
+			m_bindInfo[stage] = BindInfo();
 			for (uint16_t ii = 0; ii < numShaders; ++ii)
 			{
 				const ShaderVK* shader = shaders[ii];
@@ -6968,7 +7030,7 @@ VK_DESTROY
 
 		// Descriptor-set layout: union of every stage's bindings, deduped by binding
 		// number with the stage flags OR-ed.
-		VkDescriptorSetLayoutBinding bindings[(1 + 4*BGFX_CONFIG_MAX_RT_SHADER_GROUPS) * BX_COUNTOF(ShaderVK::m_bindings)];
+		VkDescriptorSetLayoutBinding bindings[(1 + 5*BGFX_CONFIG_MAX_RT_SHADER_GROUPS) * BX_COUNTOF(ShaderVK::m_bindings)];
 		uint32_t numBindings = 0;
 		for (uint16_t ii = 0; ii < numShaders; ++ii)
 		{

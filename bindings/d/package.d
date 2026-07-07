@@ -2546,6 +2546,18 @@ mixin(joinFnBinds((){
 		{q{AccelerationStructureHandle}, q{createBlas}, q{const(VertexBufferHandle)* vertexBuffers, const(IndexBufferHandle)* indexBuffers, ushort num}, ext: `C++, "bgfx"`},
 		
 		/**
+		* Create a bottom-level acceleration structure (BLAS) from axis-aligned bounding boxes
+		* for procedural geometry: each buffer holds tightly packed AABBs (6 floats: min xyz,
+		* max xyz; 24-byte stride), one geometry per buffer. Hits inside the boxes are reported
+		* by an intersection shader (see `createRtProgram`).
+		* Attention: Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+		Params:
+			aabbBuffers = Buffers of packed AABBs, one per geometry.
+			num = Number of geometries.
+		*/
+		{q{AccelerationStructureHandle}, q{createBlasAabbs}, q{const(VertexBufferHandle)* aabbBuffers, ushort num}, ext: `C++, "bgfx"`},
+		
+		/**
 		* Refit a bottom-level acceleration structure after its source vertex buffers changed.
 		* Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
 		* referencing this BLAS should be updated afterwards (see `updateTlas`).
@@ -2589,12 +2601,15 @@ mixin(joinFnBinds((){
 			anyHit = Optional any-hit shaders parallel to the hit groups; NULL, or
 		`BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit
 		runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).
+			intersection = Optional intersection shaders parallel to the hit groups; a valid
+		entry makes that group procedural (for AABB geometry, see
+		`createBlasAabbs`); NULL, or invalid entries, for triangle groups.
 			numHitGroups = Number of hit groups.
 			callable = Callable shaders, invoked with `CallShader`; may be NULL.
 			numCallables = Number of callable shaders.
 			destroyShaders = If true, shaders will be destroyed when program is destroyed.
 		*/
-		{q{ProgramHandle}, q{createRtProgram}, q{ShaderHandle rayGen, const(ShaderHandle)* miss, ushort numMiss, const(ShaderHandle)* closestHit, const(ShaderHandle)* anyHit, ushort numHitGroups, const(ShaderHandle)* callable, ushort numCallables, bool destroyShaders=false}, ext: `C++, "bgfx"`},
+		{q{ProgramHandle}, q{createRtProgram}, q{ShaderHandle rayGen, const(ShaderHandle)* miss, ushort numMiss, const(ShaderHandle)* closestHit, const(ShaderHandle)* anyHit, const(ShaderHandle)* intersection, ushort numHitGroups, const(ShaderHandle)* callable, ushort numCallables, bool destroyShaders=false}, ext: `C++, "bgfx"`},
 		
 		/**
 		* Destroy acceleration structure.

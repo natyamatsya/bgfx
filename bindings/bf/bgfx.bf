@@ -3477,6 +3477,20 @@ public static class bgfx
 	public static extern AccelerationStructureHandle create_blas(VertexBufferHandle* _vertexBuffers, IndexBufferHandle* _indexBuffers, uint16 _num);
 	
 	/// <summary>
+	/// Create a bottom-level acceleration structure (BLAS) from axis-aligned bounding boxes
+	/// for procedural geometry: each buffer holds tightly packed AABBs (6 floats: min xyz,
+	/// max xyz; 24-byte stride), one geometry per buffer. Hits inside the boxes are reported
+	/// by an intersection shader (see `createRtProgram`).
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	/// </summary>
+	///
+	/// <param name="_aabbBuffers">Buffers of packed AABBs, one per geometry.</param>
+	/// <param name="_num">Number of geometries.</param>
+	///
+	[LinkName("bgfx_create_blas_aabbs")]
+	public static extern AccelerationStructureHandle create_blas_aabbs(VertexBufferHandle* _aabbBuffers, uint16 _num);
+	
+	/// <summary>
 	/// Refit a bottom-level acceleration structure after its source vertex buffers changed.
 	/// Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
 	/// referencing this BLAS should be updated afterwards (see `updateTlas`).
@@ -3525,13 +3539,14 @@ public static class bgfx
 	/// <param name="_numMiss">Number of miss shaders.</param>
 	/// <param name="_closestHit">Closest-hit shaders, one triangle hit group each.</param>
 	/// <param name="_anyHit">Optional any-hit shaders parallel to the hit groups; NULL, or `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).</param>
+	/// <param name="_intersection">Optional intersection shaders parallel to the hit groups; a valid entry makes that group procedural (for AABB geometry, see `createBlasAabbs`); NULL, or invalid entries, for triangle groups.</param>
 	/// <param name="_numHitGroups">Number of hit groups.</param>
 	/// <param name="_callable">Callable shaders, invoked with `CallShader`; may be NULL.</param>
 	/// <param name="_numCallables">Number of callable shaders.</param>
 	/// <param name="_destroyShaders">If true, shaders will be destroyed when program is destroyed.</param>
 	///
 	[LinkName("bgfx_create_rt_program")]
-	public static extern ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle* _miss, uint16 _numMiss, ShaderHandle* _closestHit, ShaderHandle* _anyHit, uint16 _numHitGroups, ShaderHandle* _callable, uint16 _numCallables, bool _destroyShaders);
+	public static extern ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle* _miss, uint16 _numMiss, ShaderHandle* _closestHit, ShaderHandle* _anyHit, ShaderHandle* _intersection, uint16 _numHitGroups, ShaderHandle* _callable, uint16 _numCallables, bool _destroyShaders);
 	
 	/// <summary>
 	/// Destroy acceleration structure.

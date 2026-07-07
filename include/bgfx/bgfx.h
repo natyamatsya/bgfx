@@ -2588,6 +2588,25 @@ namespace bgfx
 		, uint16_t _num
 		);
 
+	/// Create a bottom-level acceleration structure (BLAS) from axis-aligned bounding boxes
+	/// for procedural geometry: each buffer holds tightly packed AABBs (6 floats: min xyz,
+	/// max xyz; 24-byte stride), one geometry per buffer. Hits inside the boxes are reported
+	/// by an intersection shader (see `createRtProgram`).
+	///
+	/// @param[in] _aabbBuffers Buffers of packed AABBs, one per geometry.
+	/// @param[in] _num Number of geometries.
+	///
+	/// @returns Acceleration structure handle.
+	///
+	/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+	///
+	/// @attention C99's equivalent binding is `bgfx_create_blas_aabbs`.
+	///
+	AccelerationStructureHandle createBlasAabbs(
+		  const VertexBufferHandle* _aabbBuffers
+		, uint16_t _num
+		);
+
 	/// Refit a bottom-level acceleration structure after its source vertex buffers changed.
 	/// Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
 	/// referencing this BLAS should be updated afterwards (see `updateTlas`).
@@ -2644,6 +2663,9 @@ namespace bgfx
 	/// @param[in] _anyHit Optional any-hit shaders parallel to the hit groups; NULL, or
 	///   `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit
 	///   runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).
+	/// @param[in] _intersection Optional intersection shaders parallel to the hit groups; a valid
+	///   entry makes that group procedural (for AABB geometry, see
+	///   `createBlasAabbs`); NULL, or invalid entries, for triangle groups.
 	/// @param[in] _numHitGroups Number of hit groups.
 	/// @param[in] _callable Callable shaders, invoked with `CallShader`; may be NULL.
 	/// @param[in] _numCallables Number of callable shaders.
@@ -2661,6 +2683,7 @@ namespace bgfx
 		, uint16_t _numMiss
 		, const ShaderHandle* _closestHit
 		, const ShaderHandle* _anyHit
+		, const ShaderHandle* _intersection
 		, uint16_t _numHitGroups
 		, const ShaderHandle* _callable
 		, uint16_t _numCallables

@@ -1577,6 +1577,16 @@ func.createBlas { section = "Acceleration Structures" }
 	.indexBuffers  "const IndexBufferHandle*"    --- Index buffers describing the triangles, one per geometry.
 	.num           "uint16_t"                    --- Number of geometries.
 
+--- Create a bottom-level acceleration structure (BLAS) from axis-aligned bounding boxes
+--- for procedural geometry: each buffer holds tightly packed AABBs (6 floats: min xyz,
+--- max xyz; 24-byte stride), one geometry per buffer. Hits inside the boxes are reported
+--- by an intersection shader (see `createRtProgram`).
+--- @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+func.createBlasAabbs { section = "Acceleration Structures" }
+	"AccelerationStructureHandle"              --- Acceleration structure handle.
+	.aabbBuffers "const VertexBufferHandle*"   --- Buffers of packed AABBs, one per geometry.
+	.num         "uint16_t"                    --- Number of geometries.
+
 --- Refit a bottom-level acceleration structure after its source vertex buffers changed.
 --- Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
 --- referencing this BLAS should be updated afterwards (see `updateTlas`).
@@ -1615,6 +1625,9 @@ func.createRtProgram { section = "Acceleration Structures" }
 	.anyHit        "const ShaderHandle*"  --- Optional any-hit shaders parallel to the hit groups; NULL, or
 	                                      --- `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit
 	                                      --- runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).
+	.intersection  "const ShaderHandle*"  --- Optional intersection shaders parallel to the hit groups; a valid
+	                                      --- entry makes that group procedural (for AABB geometry, see
+	                                      --- `createBlasAabbs`); NULL, or invalid entries, for triangle groups.
 	.numHitGroups  "uint16_t"             --- Number of hit groups.
 	.callable      "const ShaderHandle*"  --- Callable shaders, invoked with `CallShader`; may be NULL.
 	.numCallables  "uint16_t"             --- Number of callable shaders.

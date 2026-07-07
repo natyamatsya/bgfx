@@ -1103,6 +1103,7 @@ namespace bgfx
 			CreateIndexBuffer,
 			CreateVertexBuffer,
 			CreateBlas,
+			CreateBlasAabbs,
 			UpdateBlas,
 			CreateTlas,
 			UpdateTlas,
@@ -2375,8 +2376,9 @@ namespace bgfx
 		ShaderHandle m_vsh;
 		ShaderHandle m_fsh;
 		// Ray-tracing programs only (m_vsh = raygen): miss shaders, closest-hit shaders,
-		// any-hit shaders (parallel to the hit groups; may be invalid), then callables.
-		ShaderHandle m_rtShaders[4*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+		// any-hit shaders, intersection shaders (both parallel to the hit groups; entries
+		// may be invalid), then callables.
+		ShaderHandle m_rtShaders[5*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 		uint8_t      m_numRtMiss;
 		uint8_t      m_numRtHit;
 		uint8_t      m_numRtCallable;
@@ -4275,8 +4277,9 @@ namespace bgfx
 		virtual void createVertexBuffer(VertexBufferHandle _handle, const Memory* _mem, VertexLayoutHandle _layoutHandle, uint16_t _flags) = 0;
 		virtual void destroyVertexBuffer(VertexBufferHandle _handle) = 0;
 		virtual void createBlas(AccelerationStructureHandle _handle, const VertexBufferHandle* _vertexBuffers, const IndexBufferHandle* _indexBuffers, uint16_t _num) = 0;
+		virtual void createBlasAabbs(AccelerationStructureHandle _handle, const VertexBufferHandle* _aabbBuffers, uint16_t _num) = 0;
 		virtual void updateBlas(AccelerationStructureHandle _handle) = 0;
-		virtual void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) = 0;
+		virtual void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, const ShaderHandle* _intersection, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) = 0;
 		virtual void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) = 0;
 		virtual void updateTlas(AccelerationStructureHandle _handle, const Memory* _mem) = 0;
 		virtual void destroyAccelerationStructure(AccelerationStructureHandle _handle) = 0;
@@ -4759,6 +4762,27 @@ namespace bgfx
 				{
 					cmdbuf.write(_vertexBuffers[ii]);
 					cmdbuf.write(_indexBuffers[ii]);
+				}
+			}
+
+			return handle;
+		}
+
+		BGFX_API_FUNC(AccelerationStructureHandle createBlasAabbs(const VertexBufferHandle* _aabbBuffers, uint16_t _num) )
+		{
+			BGFX_MUTEX_SCOPE(m_resourceApiLock);
+
+			AccelerationStructureHandle handle = { m_accelerationStructureHandle.alloc() };
+			BX_WARN(isValid(handle), "Failed to allocate acceleration structure handle.");
+
+			if (isValid(handle) )
+			{
+				CommandBuffer& cmdbuf = getCommandBuffer(CommandBuffer::CreateBlasAabbs);
+				cmdbuf.write(handle);
+				cmdbuf.write(_num);
+				for (uint16_t ii = 0; ii < _num; ++ii)
+				{
+					cmdbuf.write(_aabbBuffers[ii]);
 				}
 			}
 
@@ -5796,7 +5820,7 @@ namespace bgfx
 			return handle;
 		}
 
-		BGFX_API_FUNC(ProgramHandle createRtProgram(ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables, bool _destroyShaders) )
+		BGFX_API_FUNC(ProgramHandle createRtProgram(ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, const ShaderHandle* _intersection, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables, bool _destroyShaders) )
 		{
 			BGFX_MUTEX_SCOPE(m_resourceApiLock);
 
@@ -5866,6 +5890,21 @@ namespace bgfx
 					cmdbuf.write(anyHit);
 				}
 
+				for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
+				{
+					ShaderHandle intersection = BGFX_INVALID_HANDLE;
+					if (NULL != _intersection)
+					{
+						intersection = _intersection[ii];
+					}
+					if (isValid(intersection) )
+					{
+						shaderIncRef(intersection);
+					}
+					pr.m_rtShaders[slot++] = intersection;
+					cmdbuf.write(intersection);
+				}
+
 				for (uint16_t ii = 0; ii < _numCallables; ++ii)
 				{
 					shaderIncRef(_callable[ii]);
@@ -5884,6 +5923,13 @@ namespace bgfx
 					if (NULL != _anyHit && isValid(_anyHit[ii]) )
 					{
 						shaderTakeOwnership(_anyHit[ii]);
+					}
+				}
+				for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
+				{
+					if (NULL != _intersection && isValid(_intersection[ii]) )
+					{
+						shaderTakeOwnership(_intersection[ii]);
 					}
 				}
 				for (uint16_t ii = 0; ii < _numCallables; ++ii) { shaderTakeOwnership(_callable[ii]); }
@@ -5906,7 +5952,7 @@ namespace bgfx
 				shaderDecRef(pr.m_fsh);
 			}
 
-			for (uint32_t ii = 0, num = uint32_t(pr.m_numRtMiss) + 2u*pr.m_numRtHit + pr.m_numRtCallable; ii < num; ++ii)
+			for (uint32_t ii = 0, num = uint32_t(pr.m_numRtMiss) + 3u*pr.m_numRtHit + pr.m_numRtCallable; ii < num; ++ii)
 			{
 				if (isValid(pr.m_rtShaders[ii]) )
 				{

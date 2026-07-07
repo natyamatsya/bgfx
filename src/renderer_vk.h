@@ -539,12 +539,16 @@ VK_DESTROY_FUNC(DescriptorSet);
 		// One triangle geometry of a BLAS (kept so updateBlas can refit).
 		struct Geometry
 		{
+			// Triangles, or -- when m_isAabbs -- packed AABBs (24-byte stride) for
+			// procedural geometry: m_vertexAddress is the AABB buffer, m_numTriangles the
+			// AABB count, the index fields unused.
 			VkDeviceAddress m_vertexAddress;
 			VkDeviceAddress m_indexAddress;
 			uint32_t    m_vertexStride;
 			uint32_t    m_numVertices;
 			uint32_t    m_numTriangles;
 			VkIndexType m_indexType;
+			bool        m_isAabbs;
 		};
 
 		void createBlas(VkCommandBuffer _commandBuffer, const Geometry* _geometries, uint16_t _num);
@@ -652,7 +656,7 @@ VK_DESTROY_FUNC(DescriptorSet);
 		}
 
 		void create(const ShaderVK* _vsh, const ShaderVK* _fsh);
-		void createRt(const ShaderVK* _rayGen, const ShaderVK* const* _miss, uint16_t _numMiss, const ShaderVK* const* _hit, const ShaderVK* const* _anyHit, uint16_t _numHit, const ShaderVK* const* _callable, uint16_t _numCallable);
+		void createRt(const ShaderVK* _rayGen, const ShaderVK* const* _miss, uint16_t _numMiss, const ShaderVK* const* _hit, const ShaderVK* const* _anyHit, const ShaderVK* const* _intersection, uint16_t _numHit, const ShaderVK* const* _callable, uint16_t _numCallable);
 
 		bool isRayTracing() const { return 0 != m_numRtMiss; }
 		void destroy();
@@ -664,6 +668,7 @@ VK_DESTROY_FUNC(DescriptorSet);
 		const ShaderVK* m_rtMiss[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
 		const ShaderVK* m_rtHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
 		const ShaderVK* m_rtAnyHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};   // parallel to m_rtHit; NULL = none
+		const ShaderVK* m_rtIntersection[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {}; // parallel to m_rtHit; NULL = triangle group
 		const ShaderVK* m_rtCallable[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
 		uint8_t         m_numRtMiss = 0;
 		uint8_t         m_numRtHit = 0;
