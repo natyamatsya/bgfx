@@ -29,6 +29,11 @@ dispatch) without a window, on any backend reporting `BGFX_CAPS_RAY_TRACING`.
   Phase 3 covers procedural intersection: a sphere inside an AABB BLAS
   (`bgfx::createBlasAabbs`); the intersection shader reports the analytic entry point and
   the closest-hit stage validates the reported t (`rt_pipe_{isect,chit3}.slang`).
+- `metal_rt_pipeline_spike.cpp` — standalone (raw metal-cpp, no bgfx) on-device proof
+  that the RT pipeline model maps onto Metal visible-function + intersection-function
+  tables; see `METAL_RT_PIPELINE.md`. Build:
+  `clang++ -std=c++17 -I 3rdparty tools/rt-validation/metal_rt_pipeline_spike.cpp
+  -framework Metal -framework Foundation -framework QuartzCore -o mtl_spike`
 
 ## Metal (macOS host)
 
