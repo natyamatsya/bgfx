@@ -248,6 +248,7 @@ public:
 
 		m_computeSupported = 0 != (bgfx::getCaps()->supported & BGFX_CAPS_COMPUTE);
 		m_rtSupported      = m_computeSupported && 0 != (bgfx::getCaps()->supported & BGFX_CAPS_RAY_TRACING);
+		m_rtPipeSupported  = m_rtSupported && 0 != (bgfx::getCaps()->supported & BGFX_CAPS_RAY_TRACING_PIPELINE);
 
 		PosTexCoord0Vertex::init();
 
@@ -312,6 +313,20 @@ public:
 			updateTlasTransforms(); // place the boxes (angle 0)
 
 			m_rqProgram = bgfx::createProgram(loadShader("cs_cornellbox_rq"), true);
+
+			// The RT-pipeline render stage (per-material shading in a closest-hit shader;
+			// Vulkan-only for now -- greyed out where the cap is absent).
+			if (m_rtPipeSupported)
+			{
+				bgfx::ShaderHandle miss[2] =
+				{
+					loadShader("rt_cornellbox_miss"),
+					loadShader("rt_cornellbox_shadow"),
+				};
+				bgfx::ShaderHandle rayGen = loadShader("rt_cornellbox_rg");
+				bgfx::ShaderHandle chit   = loadShader("rt_cornellbox_chit");
+				m_rtPipeProgram = bgfx::createRtProgram(rayGen, miss, 2, &chit, 1, true);
+			}
 		}
 
 		m_timeOffset = bx::getHPCounter();
@@ -332,6 +347,7 @@ public:
 				if (bgfx::isValid(m_vbh[ii]) )  bgfx::destroy(m_vbh[ii]);
 			}
 			if (bgfx::isValid(m_materialBuf) ) bgfx::destroy(m_materialBuf);
+			if (bgfx::isValid(m_rtPipeProgram) ) bgfx::destroy(m_rtPipeProgram);
 			if (bgfx::isValid(m_rqProgram) )   bgfx::destroy(m_rqProgram);
 		}
 
@@ -526,6 +542,10 @@ public:
 		ImGui::RadioButton("2. Simple PT (progressive)",     &stage, 1);
 		ImGui::RadioButton("3. PT + SVGF denoiser",          &stage, 2);
 		ImGui::RadioButton("4. PT + ReSTIR DI + denoiser",   &stage, 3);
+		if (m_rtPipeSupported)
+		{
+			ImGui::RadioButton("5. RT pipeline (hit shaders)",   &stage, 4);
+		}
 		if (stage != m_stage)
 		{
 			m_stage = stage;
@@ -579,9 +599,21 @@ public:
 			const uint32_t numX = (m_width + 7)/8;
 			const uint32_t numY = (m_height + 7)/8;
 
-			submitTracer(numX, numY);
+			if (4 == m_stage)
+			{
+				// RT-pipeline stage: per-material shading in the closest-hit shader; the
+				// dispatch dimensions are the ray-grid size in rays.
+				bgfx::setAccelerationStructure(0, m_tlas);
+				bgfx::setImage(1, m_outputTex, 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);
+				bgfx::setBuffer(3, m_materialBuf, bgfx::Access::Read);
+				bgfx::dispatch(kViewCompute, m_rtPipeProgram, m_width, m_height, 1);
+			}
+			else
+			{
+				submitTracer(numX, numY);
+			}
 
-			if (2 <= m_stage)
+			if (2 <= m_stage && 4 != m_stage)
 			{
 				submitDenoiser(numX, numY);
 			}
@@ -631,6 +663,7 @@ public:
 
 	bool m_computeSupported = false;
 	bool m_rtSupported      = false;
+	bool m_rtPipeSupported  = false;
 
 	bool     m_rotate       = false;
 	bool     m_spaceWasDown = false;
@@ -647,6 +680,7 @@ public:
 
 	bgfx::ProgramHandle m_csProgram      = BGFX_INVALID_HANDLE;
 	bgfx::ProgramHandle m_rqProgram      = BGFX_INVALID_HANDLE;
+	bgfx::ProgramHandle m_rtPipeProgram  = BGFX_INVALID_HANDLE;
 	bgfx::ProgramHandle m_atrousProgram  = BGFX_INVALID_HANDLE;
 	bgfx::ProgramHandle m_temporalProgram = BGFX_INVALID_HANDLE;
 	bgfx::ProgramHandle m_displayProgram = BGFX_INVALID_HANDLE;

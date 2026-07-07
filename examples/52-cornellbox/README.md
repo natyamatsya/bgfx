@@ -27,6 +27,10 @@ denoised real-time path tracing:
    M-clamped), one visibility ray for the selected sample. With a single area light the
    win is modest (cleaner soft shadows); the algorithm is the point — with many lights it
    becomes decisive.
+5. **RT pipeline (hit shaders)** — the stage-1 image computed through the ray-tracing
+   *pipeline*: per-material shading in a closest-hit shader, shadow ray to miss index 1,
+   the rotation angle passed via the ray payload. Vulkan-only (`BGFX_CAPS_RAY_TRACING_PIPELINE`);
+   verified bit-exact against the ray-query stage on lavapipe.
 
 Two rendering paths share the scene and all three stages (the estimator: next-event
 estimation toward the ceiling area light + cosine-weighted diffuse bounces), selected at

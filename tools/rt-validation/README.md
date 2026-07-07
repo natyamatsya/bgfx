@@ -15,11 +15,14 @@ dispatch) without a window, on any backend reporting `BGFX_CAPS_RAY_TRACING`.
   the example's compiled shaders from `examples/runtime/shaders/<target>/`.
 - `cs_rt_smoke.slang` — the smoke test's ray-query shader; compile with shaderc for the
   target backend (`-p metal --platform osx` / `-p spirv --platform linux`).
-- `rt_pipeline_smoke.cpp` — the ray-tracing **pipeline** smoke test: creates a
-  raygen+miss+closesthit program (`bgfx::createRtProgram`, `BGFX_CAPS_RAY_TRACING_PIPELINE`)
-  and traces the same triangle via `bgfx::dispatch` (ray-grid dimensions in rays). Skips
-  cleanly where the cap is absent (e.g. Metal). Stage shaders: `rt_pipe_{rg,miss,chit}.slang`
-  compiled with `--type raygeneration|miss|closesthit -p spirv`.
+- `rt_pipeline_smoke.cpp` — the ray-tracing **pipeline** smoke test
+  (`bgfx::createRtProgram`, `BGFX_CAPS_RAY_TRACING_PIPELINE`): raygen + TWO miss shaders +
+  a triangle hit group, traced via `bgfx::dispatch` (ray-grid dimensions in rays). The
+  closest-hit stage reads a chit-only material buffer, shares the acceleration-structure
+  binding with raygen, and fires a secondary ray (recursion depth 2) routed to miss
+  index 1 — full white only if every v2 feature works. Skips cleanly where the cap is
+  absent (e.g. Metal). Stage shaders: `rt_pipe_{rg,miss,miss2,chit}.slang` compiled with
+  `--type raygeneration|miss|closesthit -p spirv`.
 
 ## Metal (macOS host)
 
