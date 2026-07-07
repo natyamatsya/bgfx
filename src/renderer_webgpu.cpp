@@ -1652,9 +1652,9 @@ WGPU_IMPORT
 			BX_UNUSED(_handle);
 		}
 
-		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, uint16_t _numHitGroups) override
+		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) override
 		{
-			BX_UNUSED(_handle, _rayGen, _miss, _numMiss, _closestHit, _numHitGroups);
+			BX_UNUSED(_handle, _rayGen, _miss, _numMiss, _closestHit, _anyHit, _numHitGroups, _callable, _numCallables);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override

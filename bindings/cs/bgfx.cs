@@ -3469,11 +3469,14 @@ public static partial class bgfx
 	/// <param name="_miss">Miss shaders; `TraceRay`'s MissShaderIndex selects among them.</param>
 	/// <param name="_numMiss">Number of miss shaders.</param>
 	/// <param name="_closestHit">Closest-hit shaders, one triangle hit group each.</param>
+	/// <param name="_anyHit">Optional any-hit shaders parallel to the hit groups; NULL, or `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).</param>
 	/// <param name="_numHitGroups">Number of hit groups.</param>
+	/// <param name="_callable">Callable shaders, invoked with `CallShader`; may be NULL.</param>
+	/// <param name="_numCallables">Number of callable shaders.</param>
 	/// <param name="_destroyShaders">If true, shaders will be destroyed when program is destroyed.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_create_rt_program", CallingConvention = CallingConvention.Cdecl)]
-	public static extern unsafe ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle* _miss, ushort _numMiss, ShaderHandle* _closestHit, ushort _numHitGroups, bool _destroyShaders);
+	public static extern unsafe ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle* _miss, ushort _numMiss, ShaderHandle* _closestHit, ShaderHandle* _anyHit, ushort _numHitGroups, ShaderHandle* _callable, ushort _numCallables, bool _destroyShaders);
 	
 	/// <summary>
 	/// Destroy acceleration structure.

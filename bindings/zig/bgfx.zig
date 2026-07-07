@@ -2735,12 +2735,15 @@ extern fn bgfx_update_tlas(_handle: AccelerationStructureHandle, _mem: [*c]const
 /// <param name="_miss">Miss shaders; `TraceRay`'s MissShaderIndex selects among them.</param>
 /// <param name="_numMiss">Number of miss shaders.</param>
 /// <param name="_closestHit">Closest-hit shaders, one triangle hit group each.</param>
+/// <param name="_anyHit">Optional any-hit shaders parallel to the hit groups; NULL, or `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).</param>
 /// <param name="_numHitGroups">Number of hit groups.</param>
+/// <param name="_callable">Callable shaders, invoked with `CallShader`; may be NULL.</param>
+/// <param name="_numCallables">Number of callable shaders.</param>
 /// <param name="_destroyShaders">If true, shaders will be destroyed when program is destroyed.</param>
-pub inline fn createRtProgram(_rayGen: ShaderHandle, _miss: [*c]const ShaderHandle, _numMiss: u16, _closestHit: [*c]const ShaderHandle, _numHitGroups: u16, _destroyShaders: bool) ProgramHandle {
-    return bgfx_create_rt_program(_rayGen, _miss, _numMiss, _closestHit, _numHitGroups, _destroyShaders);
+pub inline fn createRtProgram(_rayGen: ShaderHandle, _miss: [*c]const ShaderHandle, _numMiss: u16, _closestHit: [*c]const ShaderHandle, _anyHit: [*c]const ShaderHandle, _numHitGroups: u16, _callable: [*c]const ShaderHandle, _numCallables: u16, _destroyShaders: bool) ProgramHandle {
+    return bgfx_create_rt_program(_rayGen, _miss, _numMiss, _closestHit, _anyHit, _numHitGroups, _callable, _numCallables, _destroyShaders);
 }
-extern fn bgfx_create_rt_program(_rayGen: ShaderHandle, _miss: [*c]const ShaderHandle, _numMiss: u16, _closestHit: [*c]const ShaderHandle, _numHitGroups: u16, _destroyShaders: bool) ProgramHandle;
+extern fn bgfx_create_rt_program(_rayGen: ShaderHandle, _miss: [*c]const ShaderHandle, _numMiss: u16, _closestHit: [*c]const ShaderHandle, _anyHit: [*c]const ShaderHandle, _numHitGroups: u16, _callable: [*c]const ShaderHandle, _numCallables: u16, _destroyShaders: bool) ProgramHandle;
 
 /// Destroy acceleration structure.
 /// <param name="_handle">Acceleration structure handle.</param>

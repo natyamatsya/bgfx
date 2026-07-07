@@ -3740,6 +3740,9 @@ namespace bgfx
 					uint16_t numHitGroups;
 					_cmdbuf.read(numHitGroups);
 
+					uint16_t numCallables;
+					_cmdbuf.read(numCallables);
+
 					ShaderHandle miss[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 					for (uint16_t ii = 0; ii < numMiss; ++ii)
 					{
@@ -3752,7 +3755,19 @@ namespace bgfx
 						_cmdbuf.read(closestHit[ii]);
 					}
 
-					m_renderCtx->createRtProgram(handle, rayGen, miss, numMiss, closestHit, numHitGroups);
+					ShaderHandle anyHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+					for (uint16_t ii = 0; ii < numHitGroups; ++ii)
+					{
+						_cmdbuf.read(anyHit[ii]);
+					}
+
+					ShaderHandle callable[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+					for (uint16_t ii = 0; ii < numCallables; ++ii)
+					{
+						_cmdbuf.read(callable[ii]);
+					}
+
+					m_renderCtx->createRtProgram(handle, rayGen, miss, numMiss, closestHit, anyHit, numHitGroups, callable, numCallables);
 				}
 				break;
 
@@ -5181,7 +5196,7 @@ namespace bgfx
 		s_ctx->setName(_handle, bx::StringView(_name, _len) );
 	}
 
-	ProgramHandle createRtProgram(ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, uint16_t _numHitGroups, bool _destroyShaders)
+	ProgramHandle createRtProgram(ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables, bool _destroyShaders)
 	{
 		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING_PIPELINE, "Ray tracing pipelines are not supported!");
 		BX_ASSERT(0 < _numMiss && _numMiss <= BGFX_CONFIG_MAX_RT_SHADER_GROUPS
@@ -5194,7 +5209,12 @@ namespace bgfx
 			, _numHitGroups
 			, BGFX_CONFIG_MAX_RT_SHADER_GROUPS
 			);
-		return s_ctx->createRtProgram(_rayGen, _miss, _numMiss, _closestHit, _numHitGroups, _destroyShaders);
+		BX_ASSERT(_numCallables <= BGFX_CONFIG_MAX_RT_SHADER_GROUPS
+			, "Callable count %d is out of range [0, %d]."
+			, _numCallables
+			, BGFX_CONFIG_MAX_RT_SHADER_GROUPS
+			);
+		return s_ctx->createRtProgram(_rayGen, _miss, _numMiss, _closestHit, _anyHit, _numHitGroups, _callable, _numCallables, _destroyShaders);
 	}
 
 	void destroy(ShaderHandle _handle)

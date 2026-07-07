@@ -22,7 +22,10 @@ dispatch) without a window, on any backend reporting `BGFX_CAPS_RAY_TRACING`.
   binding with raygen, and fires a secondary ray (recursion depth 2) routed to miss
   index 1 — full white only if every v2 feature works. Skips cleanly where the cap is
   absent (e.g. Metal). Stage shaders: `rt_pipe_{rg,miss,miss2,chit}.slang` compiled with
-  `--type raygeneration|miss|closesthit -p spirv`.
+  `--type raygeneration|miss|closesthit -p spirv`. Phase 2 adds any-hit + callable
+  coverage: two overlapping instances traced with `RAY_FLAG_FORCE_NON_OPAQUE` (bgfx BLAS
+  geometry is built opaque, which skips any-hit otherwise); the any-hit stage rejects the
+  front instance and a callable adds a distinct value (`rt_pipe_{rg2,ahit,chit2,call}.slang`).
 
 ## Metal (macOS host)
 
