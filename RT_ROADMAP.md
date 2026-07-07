@@ -167,8 +167,9 @@ back to the analytic compute shader otherwise.
   intersection completes the stage set: `createBlasAabbs` builds a BLAS from packed AABB
   buffers (both backends) and a valid entry in `createRtProgram`'s intersection array
   makes that hit group procedural (Vulkan pipeline; Metal ray query would need
-  bounding-box candidate handling in the shader). Remaining: deeper recursion — and a
-  Metal RT-pipeline path,
+  bounding-box candidate handling in the shader). Remaining: deeper recursion. The
+  Metal RT-pipeline path is SPIKED — runtime model proven on-device via function tables
+  (see `METAL_RT_PIPELINE.md`); blocked on Slang Metal-target RT-stage codegen, not on
   which cannot come from SPIRV-Cross (no MSL for RT pipeline stages) and would instead
   map onto Metal intersection function tables, likely via Slang's native MSL backend.
 
