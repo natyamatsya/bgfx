@@ -161,7 +161,10 @@ back to the analytic compute shader otherwise.
   declared in ANY stage (the descriptor-set layout is the dedup-by-binding union with
   stage flags OR-ed), multiple miss shaders and triangle hit groups, recursion depth 2
   (a shadow/secondary ray from a hit shader). Uniforms still come from the raygen stage.
-  Remaining: callables, anyhit/intersection stages, deeper recursion — and a Metal path,
+  Callables and any-hit stages are in (optional per-hit-group any-hit, callables as the
+  fourth SBT region; note any-hit requires non-opaque traversal, e.g.
+  `RAY_FLAG_FORCE_NON_OPAQUE`, since bgfx BLAS geometry is built opaque). Remaining:
+  procedural intersection stages, deeper recursion — and a Metal path,
   which cannot come from SPIRV-Cross (no MSL for RT pipeline stages) and would instead
   map onto Metal intersection function tables, likely via Slang's native MSL backend.
 
