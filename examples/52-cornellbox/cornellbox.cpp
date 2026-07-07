@@ -325,7 +325,7 @@ public:
 				};
 				bgfx::ShaderHandle rayGen = loadShader("rt_cornellbox_rg");
 				bgfx::ShaderHandle chit   = loadShader("rt_cornellbox_chit");
-				m_rtPipeProgram = bgfx::createRtProgram(rayGen, miss, 2, &chit, 1, true);
+				m_rtPipeProgram = bgfx::createRtProgram(rayGen, miss, 2, &chit, NULL, 1, NULL, 0, true);
 			}
 		}
 
