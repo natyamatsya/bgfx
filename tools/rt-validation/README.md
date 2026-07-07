@@ -26,6 +26,9 @@ dispatch) without a window, on any backend reporting `BGFX_CAPS_RAY_TRACING`.
   coverage: two overlapping instances traced with `RAY_FLAG_FORCE_NON_OPAQUE` (bgfx BLAS
   geometry is built opaque, which skips any-hit otherwise); the any-hit stage rejects the
   front instance and a callable adds a distinct value (`rt_pipe_{rg2,ahit,chit2,call}.slang`).
+  Phase 3 covers procedural intersection: a sphere inside an AABB BLAS
+  (`bgfx::createBlasAabbs`); the intersection shader reports the analytic entry point and
+  the closest-hit stage validates the reported t (`rt_pipe_{isect,chit3}.slang`).
 
 ## Metal (macOS host)
 

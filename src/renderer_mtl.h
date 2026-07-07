@@ -310,11 +310,15 @@ namespace bgfx { namespace mtl
 		// One triangle geometry of a BLAS.
 		struct Geometry
 		{
+			// Triangles, or -- when m_isAabbs -- packed AABBs (24-byte stride) for
+			// procedural geometry: m_vertexBuffer is the AABB buffer, m_numTriangles the
+			// AABB count, the index fields unused.
 			MTL::Buffer* m_vertexBuffer;
 			MTL::Buffer* m_indexBuffer;
 			uint32_t     m_vertexStride;
 			uint32_t     m_numTriangles;
 			bool         m_index32;
+			bool         m_isAabbs;
 		};
 
 		void createBlas(MTL::Device* _device, MTL::AccelerationStructureCommandEncoder* _encoder, const Geometry* _geometries, uint16_t _num);

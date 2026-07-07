@@ -2535,6 +2535,15 @@ extern fn void destroy_vertex_layout(VertexLayoutHandle _layoutHandle) @cname("b
 // _num : `Number of geometries.`
 extern fn AccelerationStructureHandle create_blas(VertexBufferHandle* _vertexBuffers, IndexBufferHandle* _indexBuffers, ushort _num) @cname("bgfx_create_blas");
 
+// Create a bottom-level acceleration structure (BLAS) from axis-aligned bounding boxes
+// for procedural geometry: each buffer holds tightly packed AABBs (6 floats: min xyz,
+// max xyz; 24-byte stride), one geometry per buffer. Hits inside the boxes are reported
+// by an intersection shader (see `createRtProgram`).
+// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+// _aabbBuffers : `Buffers of packed AABBs, one per geometry.`
+// _num : `Number of geometries.`
+extern fn AccelerationStructureHandle create_blas_aabbs(VertexBufferHandle* _aabbBuffers, ushort _num) @cname("bgfx_create_blas_aabbs");
+
 // Refit a bottom-level acceleration structure after its source vertex buffers changed.
 // Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
 // referencing this BLAS should be updated afterwards (see `updateTlas`).
@@ -2566,11 +2575,12 @@ extern fn void update_tlas(AccelerationStructureHandle _handle, Memory* _mem) @c
 // _numMiss : `Number of miss shaders.`
 // _closestHit : `Closest-hit shaders, one triangle hit group each.`
 // _anyHit : `Optional any-hit shaders parallel to the hit groups; NULL, or `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).`
+// _intersection : `Optional intersection shaders parallel to the hit groups; a valid entry makes that group procedural (for AABB geometry, see `createBlasAabbs`); NULL, or invalid entries, for triangle groups.`
 // _numHitGroups : `Number of hit groups.`
 // _callable : `Callable shaders, invoked with `CallShader`; may be NULL.`
 // _numCallables : `Number of callable shaders.`
 // _destroyShaders : `If true, shaders will be destroyed when program is destroyed.`
-extern fn ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle* _miss, ushort _numMiss, ShaderHandle* _closestHit, ShaderHandle* _anyHit, ushort _numHitGroups, ShaderHandle* _callable, ushort _numCallables, bool _destroyShaders) @cname("bgfx_create_rt_program");
+extern fn ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle* _miss, ushort _numMiss, ShaderHandle* _closestHit, ShaderHandle* _anyHit, ShaderHandle* _intersection, ushort _numHitGroups, ShaderHandle* _callable, ushort _numCallables, bool _destroyShaders) @cname("bgfx_create_rt_program");
 
 // Destroy acceleration structure.
 // _handle : `Acceleration structure handle.`

@@ -3540,6 +3540,26 @@ namespace bgfx
 				}
 				break;
 
+			case CommandBuffer::CreateBlasAabbs:
+				{
+					BGFX_PROFILER_SCOPE("CreateBlasAabbs", kColorResource);
+
+					AccelerationStructureHandle handle;
+					_cmdbuf.read(handle);
+
+					uint16_t num;
+					_cmdbuf.read(num);
+
+					VertexBufferHandle aabbBuffers[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+					for (uint16_t ii = 0; ii < num; ++ii)
+					{
+						_cmdbuf.read(aabbBuffers[ii]);
+					}
+
+					m_renderCtx->createBlasAabbs(handle, aabbBuffers, num);
+				}
+				break;
+
 			case CommandBuffer::UpdateBlas:
 				{
 					BGFX_PROFILER_SCOPE("UpdateBlas", kColorResource);
@@ -3790,13 +3810,19 @@ namespace bgfx
 						_cmdbuf.read(anyHit[ii]);
 					}
 
+					ShaderHandle intersection[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+					for (uint16_t ii = 0; ii < numHitGroups; ++ii)
+					{
+						_cmdbuf.read(intersection[ii]);
+					}
+
 					ShaderHandle callable[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 					for (uint16_t ii = 0; ii < numCallables; ++ii)
 					{
 						_cmdbuf.read(callable[ii]);
 					}
 
-					m_renderCtx->createRtProgram(handle, rayGen, miss, numMiss, closestHit, anyHit, numHitGroups, callable, numCallables);
+					m_renderCtx->createRtProgram(handle, rayGen, miss, numMiss, closestHit, anyHit, intersection, numHitGroups, callable, numCallables);
 				}
 				break;
 
@@ -5019,6 +5045,18 @@ namespace bgfx
 		return s_ctx->createBlas(_vertexBuffers, _indexBuffers, _num);
 	}
 
+	AccelerationStructureHandle createBlasAabbs(const VertexBufferHandle* _aabbBuffers, uint16_t _num)
+	{
+		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING, "Ray tracing is not supported!");
+		BX_ASSERT(NULL != _aabbBuffers, "Buffer array can't be NULL");
+		BX_ASSERT(0 < _num && _num <= BGFX_CONFIG_MAX_BLAS_GEOMETRIES
+			, "BLAS geometry count %d is out of range [1, %d]."
+			, _num
+			, BGFX_CONFIG_MAX_BLAS_GEOMETRIES
+			);
+		return s_ctx->createBlasAabbs(_aabbBuffers, _num);
+	}
+
 	void updateBlas(AccelerationStructureHandle _handle)
 	{
 		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING, "Ray tracing is not supported!");
@@ -5229,7 +5267,7 @@ namespace bgfx
 		s_ctx->setName(_handle, bx::StringView(_name, _len) );
 	}
 
-	ProgramHandle createRtProgram(ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables, bool _destroyShaders)
+	ProgramHandle createRtProgram(ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, const ShaderHandle* _intersection, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables, bool _destroyShaders)
 	{
 		BGFX_CHECK_CAPS(BGFX_CAPS_RAY_TRACING_PIPELINE, "Ray tracing pipelines are not supported!");
 		BX_ASSERT(0 < _numMiss && _numMiss <= BGFX_CONFIG_MAX_RT_SHADER_GROUPS
@@ -5247,7 +5285,7 @@ namespace bgfx
 			, _numCallables
 			, BGFX_CONFIG_MAX_RT_SHADER_GROUPS
 			);
-		return s_ctx->createRtProgram(_rayGen, _miss, _numMiss, _closestHit, _anyHit, _numHitGroups, _callable, _numCallables, _destroyShaders);
+		return s_ctx->createRtProgram(_rayGen, _miss, _numMiss, _closestHit, _anyHit, _intersection, _numHitGroups, _callable, _numCallables, _destroyShaders);
 	}
 
 	void destroy(ShaderHandle _handle)

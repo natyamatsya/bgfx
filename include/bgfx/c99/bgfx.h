@@ -1652,6 +1652,21 @@ BGFX_C_API void bgfx_destroy_vertex_layout(bgfx_vertex_layout_handle_t _layoutHa
 BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_blas(const bgfx_vertex_buffer_handle_t* _vertexBuffers, const bgfx_index_buffer_handle_t* _indexBuffers, uint16_t _num);
 
 /**
+ * Create a bottom-level acceleration structure (BLAS) from axis-aligned bounding boxes
+ * for procedural geometry: each buffer holds tightly packed AABBs (6 floats: min xyz,
+ * max xyz; 24-byte stride), one geometry per buffer. Hits inside the boxes are reported
+ * by an intersection shader (see `createRtProgram`).
+ * @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+ *
+ * @param[in] _aabbBuffers Buffers of packed AABBs, one per geometry.
+ * @param[in] _num Number of geometries.
+ *
+ * @returns Acceleration structure handle.
+ *
+ */
+BGFX_C_API bgfx_acceleration_structure_handle_t bgfx_create_blas_aabbs(const bgfx_vertex_buffer_handle_t* _aabbBuffers, uint16_t _num);
+
+/**
  * Refit a bottom-level acceleration structure after its source vertex buffers changed.
  * Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
  * referencing this BLAS should be updated afterwards (see `updateTlas`).
@@ -1700,6 +1715,9 @@ BGFX_C_API void bgfx_update_tlas(bgfx_acceleration_structure_handle_t _handle, c
  * @param[in] _anyHit Optional any-hit shaders parallel to the hit groups; NULL, or
  *  `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit
  *  runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).
+ * @param[in] _intersection Optional intersection shaders parallel to the hit groups; a valid
+ *  entry makes that group procedural (for AABB geometry, see
+ *  `createBlasAabbs`); NULL, or invalid entries, for triangle groups.
  * @param[in] _numHitGroups Number of hit groups.
  * @param[in] _callable Callable shaders, invoked with `CallShader`; may be NULL.
  * @param[in] _numCallables Number of callable shaders.
@@ -1708,7 +1726,7 @@ BGFX_C_API void bgfx_update_tlas(bgfx_acceleration_structure_handle_t _handle, c
  * @returns Program handle.
  *
  */
-BGFX_C_API bgfx_program_handle_t bgfx_create_rt_program(bgfx_shader_handle_t _rayGen, const bgfx_shader_handle_t* _miss, uint16_t _numMiss, const bgfx_shader_handle_t* _closestHit, const bgfx_shader_handle_t* _anyHit, uint16_t _numHitGroups, const bgfx_shader_handle_t* _callable, uint16_t _numCallables, bool _destroyShaders);
+BGFX_C_API bgfx_program_handle_t bgfx_create_rt_program(bgfx_shader_handle_t _rayGen, const bgfx_shader_handle_t* _miss, uint16_t _numMiss, const bgfx_shader_handle_t* _closestHit, const bgfx_shader_handle_t* _anyHit, const bgfx_shader_handle_t* _intersection, uint16_t _numHitGroups, const bgfx_shader_handle_t* _callable, uint16_t _numCallables, bool _destroyShaders);
 
 /**
  * Destroy acceleration structure.
@@ -4155,6 +4173,7 @@ typedef enum bgfx_function_id
     BGFX_FUNCTION_ID_CREATE_VERTEX_LAYOUT,
     BGFX_FUNCTION_ID_DESTROY_VERTEX_LAYOUT,
     BGFX_FUNCTION_ID_CREATE_BLAS,
+    BGFX_FUNCTION_ID_CREATE_BLAS_AABBS,
     BGFX_FUNCTION_ID_UPDATE_BLAS,
     BGFX_FUNCTION_ID_CREATE_TLAS,
     BGFX_FUNCTION_ID_UPDATE_TLAS,
@@ -4378,10 +4397,11 @@ struct bgfx_interface_vtbl
     bgfx_vertex_layout_handle_t (*create_vertex_layout)(const bgfx_vertex_layout_t * _layout);
     void (*destroy_vertex_layout)(bgfx_vertex_layout_handle_t _layoutHandle);
     bgfx_acceleration_structure_handle_t (*create_blas)(const bgfx_vertex_buffer_handle_t* _vertexBuffers, const bgfx_index_buffer_handle_t* _indexBuffers, uint16_t _num);
+    bgfx_acceleration_structure_handle_t (*create_blas_aabbs)(const bgfx_vertex_buffer_handle_t* _aabbBuffers, uint16_t _num);
     void (*update_blas)(bgfx_acceleration_structure_handle_t _handle);
     bgfx_acceleration_structure_handle_t (*create_tlas)(const bgfx_acceleration_structure_handle_t* _blases, uint16_t _num);
     void (*update_tlas)(bgfx_acceleration_structure_handle_t _handle, const bgfx_memory_t* _mem);
-    bgfx_program_handle_t (*create_rt_program)(bgfx_shader_handle_t _rayGen, const bgfx_shader_handle_t* _miss, uint16_t _numMiss, const bgfx_shader_handle_t* _closestHit, const bgfx_shader_handle_t* _anyHit, uint16_t _numHitGroups, const bgfx_shader_handle_t* _callable, uint16_t _numCallables, bool _destroyShaders);
+    bgfx_program_handle_t (*create_rt_program)(bgfx_shader_handle_t _rayGen, const bgfx_shader_handle_t* _miss, uint16_t _numMiss, const bgfx_shader_handle_t* _closestHit, const bgfx_shader_handle_t* _anyHit, const bgfx_shader_handle_t* _intersection, uint16_t _numHitGroups, const bgfx_shader_handle_t* _callable, uint16_t _numCallables, bool _destroyShaders);
     void (*destroy_acceleration_structure)(bgfx_acceleration_structure_handle_t _handle);
     bgfx_vertex_buffer_handle_t (*create_vertex_buffer)(const bgfx_memory_t* _mem, const bgfx_vertex_layout_t * _layout, uint16_t _flags);
     void (*set_vertex_buffer_name)(bgfx_vertex_buffer_handle_t _handle, const char* _name, int32_t _len);

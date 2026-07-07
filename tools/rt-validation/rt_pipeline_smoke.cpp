@@ -2,7 +2,7 @@
 // raygen+miss+closesthit program (bgfx::createRtProgram), trace one ray per pixel with
 // bgfx::dispatch (ray-grid dimensions in rays), read back the image. Expect white (hit).
 // Skips cleanly (exit 0) where BGFX_CAPS_RAY_TRACING_PIPELINE is absent (e.g. Metal).
-// Usage: rt_pipeline_smoke <rg.bin> <miss.bin> <miss2.bin> <chit.bin> <rg2.bin> <ahit.bin> <chit2.bin> <callable.bin>
+// Usage: rt_pipeline_smoke <rg> <miss> <miss2> <chit> <rg2> <ahit> <chit2> <callable> <isect> <chit3>
 #include <bgfx/bgfx.h>
 #include <cstdio>
 #include <cstdint>
@@ -21,7 +21,7 @@ static const bgfx::Memory* loadBin(const char* path)
 
 int main(int argc, char** argv)
 {
-	if (argc < 9) { printf("usage: %s <rg> <miss> <miss2> <chit> <rg2> <ahit> <chit2> <callable>\n", argv[0]); return 1; }
+	if (argc < 11) { printf("usage: %s <rg> <miss> <miss2> <chit> <rg2> <ahit> <chit2> <callable> <isect> <chit3>\n", argv[0]); return 1; }
 	const uint32_t kW = 64, kH = 64;
 
 	bgfx::renderFrame();
@@ -62,7 +62,7 @@ int main(int argc, char** argv)
 	static const float mats[4] = { 0.75f, 0.75f, 0.75f, 0.75f };
 	bgfx::VertexBufferHandle mbh = bgfx::createVertexBuffer(bgfx::copy(mats, sizeof(mats) ), matLayout, BGFX_BUFFER_COMPUTE_READ);
 
-	bgfx::ProgramHandle prog = bgfx::createRtProgram(rg, mi, 2, &ch, NULL, 1, NULL, 0, true);
+	bgfx::ProgramHandle prog = bgfx::createRtProgram(rg, mi, 2, &ch, NULL, NULL, 1, NULL, 0, true);
 	printf("rt program valid=%d\n", bgfx::isValid(prog) );
 	if (!bgfx::isValid(prog) ) { bgfx::shutdown(); return 1; }
 
@@ -114,7 +114,7 @@ int main(int argc, char** argv)
 	static const float mats2[4] = { 0.25f, 0.5f, 0.0f, 0.0f }; // per-instance
 	bgfx::VertexBufferHandle mbh2 = bgfx::createVertexBuffer(bgfx::copy(mats2, sizeof(mats2) ), mat2Layout, BGFX_BUFFER_COMPUTE_READ);
 
-	bgfx::ProgramHandle prog2 = bgfx::createRtProgram(rg2, &mi2b, 1, &ch2, &ah, 1, &call, 1, true);
+	bgfx::ProgramHandle prog2 = bgfx::createRtProgram(rg2, &mi2b, 1, &ch2, &ah, NULL, 1, &call, 1, true);
 	printf("phase2 rt program valid=%d\n", bgfx::isValid(prog2) );
 
 	bgfx::setAccelerationStructure(0, tlas2);
@@ -135,9 +135,50 @@ int main(int argc, char** argv)
 
 	bgfx::destroy(prog2); bgfx::destroy(mbh2); bgfx::destroy(tlas2);
 
+	// Phase 3: procedural intersection. A sphere (centre (0,0,5), r=0.8) lives inside a
+	// single AABB BLAS geometry; the intersection shader reports the analytic entry point
+	// and the closest-hit shader validates the reported t (0.5 hit + 0.5 t-check).
+	bgfx::VertexLayout aabbLayout;
+	aabbLayout.begin()
+		.add(bgfx::Attrib::TexCoord0, 3, bgfx::AttribType::Float)
+		.add(bgfx::Attrib::TexCoord1, 3, bgfx::AttribType::Float)
+		.end(); // 24-byte stride: min xyz, max xyz
+	static const float aabb[6] = { -1.0f, -1.0f, 4.0f, 1.0f, 1.0f, 6.0f };
+	bgfx::VertexBufferHandle abh = bgfx::createVertexBuffer(bgfx::copy(aabb, sizeof(aabb) ), aabbLayout);
+
+	bgfx::AccelerationStructureHandle blas3 = bgfx::createBlasAabbs(&abh, 1);
+	bgfx::AccelerationStructureHandle tlas3 = bgfx::createTlas(&blas3, 1);
+	bgfx::frame(); bgfx::frame();
+
+	bgfx::ShaderHandle rg3  = bgfx::createShader(loadBin(argv[1]) ); // reuse plain raygen
+	bgfx::ShaderHandle mi3  = bgfx::createShader(loadBin(argv[2]) ); // reuse miss 0
+	bgfx::ShaderHandle is3  = bgfx::createShader(loadBin(argv[9]) );
+	bgfx::ShaderHandle ch3  = bgfx::createShader(loadBin(argv[10]) );
+	printf("phase3 shaders valid: rg=%d miss=%d isect=%d chit3=%d\n", bgfx::isValid(rg3), bgfx::isValid(mi3), bgfx::isValid(is3), bgfx::isValid(ch3) );
+
+	bgfx::ProgramHandle prog3 = bgfx::createRtProgram(rg3, &mi3, 1, &ch3, NULL, &is3, 1, NULL, 0, true);
+	printf("phase3 rt program valid=%d\n", bgfx::isValid(prog3) );
+
+	bgfx::setAccelerationStructure(0, tlas3);
+	bgfx::setImage(1, outTex, 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);
+	bgfx::dispatch(0, prog3, kW, kH, 1);
+	bgfx::blit(1, rbTex, 0, 0, outTex);
+	frameAvail = bgfx::readTexture(rbTex, pixels.data() );
+	while (frame < frameAvail) { frame = bgfx::frame(); }
+
+	// 1.0 needs the procedural hit (0.5) AND the reported t to equal the analytic sphere
+	// entry 4.2 (+0.5); ~128 = hit with wrong t, 0 = intersection stage never ran.
+	uint32_t hits3 = 0;
+	for (uint32_t i = 0; i < kW*kH; ++i) { if (pixels[i*4] > 240) ++hits3; }
+	printf("phase3 full-white pixels: %u / %u   center=%u\n", hits3, kW*kH, pixels[(kH/2*kW + kW/2)*4]);
+	const bool pass3 = hits3 > (kW*kH/2);
+	printf(pass3 ? "RESULT3: PASS (procedural intersection)\n" : "RESULT3: FAIL\n");
+
+	bgfx::destroy(prog3); bgfx::destroy(tlas3); bgfx::destroy(blas3); bgfx::destroy(abh);
+
 	bgfx::destroy(tlas); bgfx::destroy(blas);
 	bgfx::destroy(rbTex); bgfx::destroy(outTex);
 	bgfx::destroy(prog); bgfx::destroy(mbh); bgfx::destroy(vbh); bgfx::destroy(ibh);
 	bgfx::shutdown();
-	return (pass && pass2) ? 0 : 3;
+	return (pass && pass2 && pass3) ? 0 : 3;
 }

@@ -190,7 +190,7 @@ int main(int argc,char**argv){
 	bgfx::ShaderHandle miss[2]={bgfx::createShader(loadBin(argv[3])),bgfx::createShader(loadBin(argv[4]))};
 	bgfx::ShaderHandle rgS=bgfx::createShader(loadBin(argv[2]));
 	bgfx::ShaderHandle chS=bgfx::createShader(loadBin(argv[5]));
-	bgfx::ProgramHandle rtp=bgfx::createRtProgram(rgS,miss,2,&chS,NULL,1,NULL,0,true);
+	bgfx::ProgramHandle rtp=bgfx::createRtProgram(rgS,miss,2,&chS,NULL,NULL,1,NULL,0,true);
 	printf("rt program valid=%d\n",bgfx::isValid(rtp));
 	bgfx::setUniform(g_params,pr);
 	bgfx::setAccelerationStructure(0,g_tlas);

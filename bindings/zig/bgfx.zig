@@ -2657,6 +2657,18 @@ pub inline fn createBlas(_vertexBuffers: [*c]const VertexBufferHandle, _indexBuf
 }
 extern fn bgfx_create_blas(_vertexBuffers: [*c]const VertexBufferHandle, _indexBuffers: [*c]const IndexBufferHandle, _num: u16) AccelerationStructureHandle;
 
+/// Create a bottom-level acceleration structure (BLAS) from axis-aligned bounding boxes
+/// for procedural geometry: each buffer holds tightly packed AABBs (6 floats: min xyz,
+/// max xyz; 24-byte stride), one geometry per buffer. Hits inside the boxes are reported
+/// by an intersection shader (see `createRtProgram`).
+/// @attention Availability depends on: `BGFX_CAPS_RAY_TRACING`.
+/// <param name="_aabbBuffers">Buffers of packed AABBs, one per geometry.</param>
+/// <param name="_num">Number of geometries.</param>
+pub inline fn createBlasAabbs(_aabbBuffers: [*c]const VertexBufferHandle, _num: u16) AccelerationStructureHandle {
+    return bgfx_create_blas_aabbs(_aabbBuffers, _num);
+}
+extern fn bgfx_create_blas_aabbs(_aabbBuffers: [*c]const VertexBufferHandle, _num: u16) AccelerationStructureHandle;
+
 /// Refit a bottom-level acceleration structure after its source vertex buffers changed.
 /// Cheaper than a rebuild; topology (index buffers, counts) must be unchanged. A TLAS
 /// referencing this BLAS should be updated afterwards (see `updateTlas`).
@@ -2697,14 +2709,15 @@ extern fn bgfx_update_tlas(_handle: AccelerationStructureHandle, _mem: [*c]const
 /// <param name="_numMiss">Number of miss shaders.</param>
 /// <param name="_closestHit">Closest-hit shaders, one triangle hit group each.</param>
 /// <param name="_anyHit">Optional any-hit shaders parallel to the hit groups; NULL, or `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).</param>
+/// <param name="_intersection">Optional intersection shaders parallel to the hit groups; a valid entry makes that group procedural (for AABB geometry, see `createBlasAabbs`); NULL, or invalid entries, for triangle groups.</param>
 /// <param name="_numHitGroups">Number of hit groups.</param>
 /// <param name="_callable">Callable shaders, invoked with `CallShader`; may be NULL.</param>
 /// <param name="_numCallables">Number of callable shaders.</param>
 /// <param name="_destroyShaders">If true, shaders will be destroyed when program is destroyed.</param>
-pub inline fn createRtProgram(_rayGen: ShaderHandle, _miss: [*c]const ShaderHandle, _numMiss: u16, _closestHit: [*c]const ShaderHandle, _anyHit: [*c]const ShaderHandle, _numHitGroups: u16, _callable: [*c]const ShaderHandle, _numCallables: u16, _destroyShaders: bool) ProgramHandle {
-    return bgfx_create_rt_program(_rayGen, _miss, _numMiss, _closestHit, _anyHit, _numHitGroups, _callable, _numCallables, _destroyShaders);
+pub inline fn createRtProgram(_rayGen: ShaderHandle, _miss: [*c]const ShaderHandle, _numMiss: u16, _closestHit: [*c]const ShaderHandle, _anyHit: [*c]const ShaderHandle, _intersection: [*c]const ShaderHandle, _numHitGroups: u16, _callable: [*c]const ShaderHandle, _numCallables: u16, _destroyShaders: bool) ProgramHandle {
+    return bgfx_create_rt_program(_rayGen, _miss, _numMiss, _closestHit, _anyHit, _intersection, _numHitGroups, _callable, _numCallables, _destroyShaders);
 }
-extern fn bgfx_create_rt_program(_rayGen: ShaderHandle, _miss: [*c]const ShaderHandle, _numMiss: u16, _closestHit: [*c]const ShaderHandle, _anyHit: [*c]const ShaderHandle, _numHitGroups: u16, _callable: [*c]const ShaderHandle, _numCallables: u16, _destroyShaders: bool) ProgramHandle;
+extern fn bgfx_create_rt_program(_rayGen: ShaderHandle, _miss: [*c]const ShaderHandle, _numMiss: u16, _closestHit: [*c]const ShaderHandle, _anyHit: [*c]const ShaderHandle, _intersection: [*c]const ShaderHandle, _numHitGroups: u16, _callable: [*c]const ShaderHandle, _numCallables: u16, _destroyShaders: bool) ProgramHandle;
 
 /// Destroy acceleration structure.
 /// <param name="_handle">Acceleration structure handle.</param>
