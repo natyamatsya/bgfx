@@ -1697,13 +1697,18 @@ BGFX_C_API void bgfx_update_tlas(bgfx_acceleration_structure_handle_t _handle, c
  * @param[in] _miss Miss shaders; `TraceRay`'s MissShaderIndex selects among them.
  * @param[in] _numMiss Number of miss shaders.
  * @param[in] _closestHit Closest-hit shaders, one triangle hit group each.
+ * @param[in] _anyHit Optional any-hit shaders parallel to the hit groups; NULL, or
+ *  `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit
+ *  runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).
  * @param[in] _numHitGroups Number of hit groups.
+ * @param[in] _callable Callable shaders, invoked with `CallShader`; may be NULL.
+ * @param[in] _numCallables Number of callable shaders.
  * @param[in] _destroyShaders If true, shaders will be destroyed when program is destroyed.
  *
  * @returns Program handle.
  *
  */
-BGFX_C_API bgfx_program_handle_t bgfx_create_rt_program(bgfx_shader_handle_t _rayGen, const bgfx_shader_handle_t* _miss, uint16_t _numMiss, const bgfx_shader_handle_t* _closestHit, uint16_t _numHitGroups, bool _destroyShaders);
+BGFX_C_API bgfx_program_handle_t bgfx_create_rt_program(bgfx_shader_handle_t _rayGen, const bgfx_shader_handle_t* _miss, uint16_t _numMiss, const bgfx_shader_handle_t* _closestHit, const bgfx_shader_handle_t* _anyHit, uint16_t _numHitGroups, const bgfx_shader_handle_t* _callable, uint16_t _numCallables, bool _destroyShaders);
 
 /**
  * Destroy acceleration structure.
@@ -4376,7 +4381,7 @@ struct bgfx_interface_vtbl
     void (*update_blas)(bgfx_acceleration_structure_handle_t _handle);
     bgfx_acceleration_structure_handle_t (*create_tlas)(const bgfx_acceleration_structure_handle_t* _blases, uint16_t _num);
     void (*update_tlas)(bgfx_acceleration_structure_handle_t _handle, const bgfx_memory_t* _mem);
-    bgfx_program_handle_t (*create_rt_program)(bgfx_shader_handle_t _rayGen, const bgfx_shader_handle_t* _miss, uint16_t _numMiss, const bgfx_shader_handle_t* _closestHit, uint16_t _numHitGroups, bool _destroyShaders);
+    bgfx_program_handle_t (*create_rt_program)(bgfx_shader_handle_t _rayGen, const bgfx_shader_handle_t* _miss, uint16_t _numMiss, const bgfx_shader_handle_t* _closestHit, const bgfx_shader_handle_t* _anyHit, uint16_t _numHitGroups, const bgfx_shader_handle_t* _callable, uint16_t _numCallables, bool _destroyShaders);
     void (*destroy_acceleration_structure)(bgfx_acceleration_structure_handle_t _handle);
     bgfx_vertex_buffer_handle_t (*create_vertex_buffer)(const bgfx_memory_t* _mem, const bgfx_vertex_layout_t * _layout, uint16_t _flags);
     void (*set_vertex_buffer_name)(bgfx_vertex_buffer_handle_t _handle, const char* _name, int32_t _len);

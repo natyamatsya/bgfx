@@ -2565,9 +2565,12 @@ extern fn void update_tlas(AccelerationStructureHandle _handle, Memory* _mem) @c
 // _miss : `Miss shaders; `TraceRay`'s MissShaderIndex selects among them.`
 // _numMiss : `Number of miss shaders.`
 // _closestHit : `Closest-hit shaders, one triangle hit group each.`
+// _anyHit : `Optional any-hit shaders parallel to the hit groups; NULL, or `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).`
 // _numHitGroups : `Number of hit groups.`
+// _callable : `Callable shaders, invoked with `CallShader`; may be NULL.`
+// _numCallables : `Number of callable shaders.`
 // _destroyShaders : `If true, shaders will be destroyed when program is destroyed.`
-extern fn ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle* _miss, ushort _numMiss, ShaderHandle* _closestHit, ushort _numHitGroups, bool _destroyShaders) @cname("bgfx_create_rt_program");
+extern fn ProgramHandle create_rt_program(ShaderHandle _rayGen, ShaderHandle* _miss, ushort _numMiss, ShaderHandle* _closestHit, ShaderHandle* _anyHit, ushort _numHitGroups, ShaderHandle* _callable, ushort _numCallables, bool _destroyShaders) @cname("bgfx_create_rt_program");
 
 // Destroy acceleration structure.
 // _handle : `Acceleration structure handle.`

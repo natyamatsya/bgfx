@@ -2569,10 +2569,15 @@ mixin(joinFnBinds((){
 			miss = Miss shaders; `TraceRay`'s MissShaderIndex selects among them.
 			numMiss = Number of miss shaders.
 			closestHit = Closest-hit shaders, one triangle hit group each.
+			anyHit = Optional any-hit shaders parallel to the hit groups; NULL, or
+		`BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit
+		runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).
 			numHitGroups = Number of hit groups.
+			callable = Callable shaders, invoked with `CallShader`; may be NULL.
+			numCallables = Number of callable shaders.
 			destroyShaders = If true, shaders will be destroyed when program is destroyed.
 		*/
-		{q{ProgramHandle}, q{createRtProgram}, q{ShaderHandle rayGen, const(ShaderHandle)* miss, ushort numMiss, const(ShaderHandle)* closestHit, ushort numHitGroups, bool destroyShaders=false}, ext: `C++, "bgfx"`},
+		{q{ProgramHandle}, q{createRtProgram}, q{ShaderHandle rayGen, const(ShaderHandle)* miss, ushort numMiss, const(ShaderHandle)* closestHit, const(ShaderHandle)* anyHit, ushort numHitGroups, const(ShaderHandle)* callable, ushort numCallables, bool destroyShaders=false}, ext: `C++, "bgfx"`},
 		
 		/**
 		* Destroy acceleration structure.

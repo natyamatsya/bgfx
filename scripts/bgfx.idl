@@ -1601,7 +1601,12 @@ func.createRtProgram { section = "Acceleration Structures" }
 	.miss          "const ShaderHandle*"  --- Miss shaders; `TraceRay`'s MissShaderIndex selects among them.
 	.numMiss       "uint16_t"             --- Number of miss shaders.
 	.closestHit    "const ShaderHandle*"  --- Closest-hit shaders, one triangle hit group each.
+	.anyHit        "const ShaderHandle*"  --- Optional any-hit shaders parallel to the hit groups; NULL, or
+	                                      --- `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit
+	                                      --- runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).
 	.numHitGroups  "uint16_t"             --- Number of hit groups.
+	.callable      "const ShaderHandle*"  --- Callable shaders, invoked with `CallShader`; may be NULL.
+	.numCallables  "uint16_t"             --- Number of callable shaders.
 	.destroyShaders "bool"                --- If true, shaders will be destroyed when program is destroyed.
 	 { default = false }
 

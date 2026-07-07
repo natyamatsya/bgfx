@@ -653,7 +653,7 @@ VK_DESTROY_FUNC(DescriptorSet);
 		}
 
 		void create(const ShaderVK* _vsh, const ShaderVK* _fsh);
-		void createRt(const ShaderVK* _rayGen, const ShaderVK* const* _miss, uint16_t _numMiss, const ShaderVK* const* _hit, uint16_t _numHit);
+		void createRt(const ShaderVK* _rayGen, const ShaderVK* const* _miss, uint16_t _numMiss, const ShaderVK* const* _hit, const ShaderVK* const* _anyHit, uint16_t _numHit, const ShaderVK* const* _callable, uint16_t _numCallable);
 
 		bool isRayTracing() const { return 0 != m_numRtMiss; }
 		void destroy();
@@ -664,8 +664,11 @@ VK_DESTROY_FUNC(DescriptorSet);
 		// the shader binding table built at pipeline creation.
 		const ShaderVK* m_rtMiss[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
 		const ShaderVK* m_rtHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
+		const ShaderVK* m_rtAnyHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};   // parallel to m_rtHit; NULL = none
+		const ShaderVK* m_rtCallable[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
 		uint8_t         m_numRtMiss = 0;
 		uint8_t         m_numRtHit = 0;
+		uint8_t         m_numRtCallable = 0;
 		VkBuffer        m_sbtBuffer = VK_NULL_HANDLE;
 		VkDeviceMemory  m_sbtMem = VK_NULL_HANDLE;
 		VkStridedDeviceAddressRegionKHR m_sbtRayGen = {};

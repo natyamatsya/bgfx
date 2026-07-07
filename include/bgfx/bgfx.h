@@ -2648,7 +2648,12 @@ namespace bgfx
 	/// @param[in] _miss Miss shaders; `TraceRay`'s MissShaderIndex selects among them.
 	/// @param[in] _numMiss Number of miss shaders.
 	/// @param[in] _closestHit Closest-hit shaders, one triangle hit group each.
+	/// @param[in] _anyHit Optional any-hit shaders parallel to the hit groups; NULL, or
+	///   `BGFX_INVALID_HANDLE` entries, for groups without one. Any-hit
+	///   runs only for non-opaque geometry (e.g. `RAY_FLAG_FORCE_NON_OPAQUE`).
 	/// @param[in] _numHitGroups Number of hit groups.
+	/// @param[in] _callable Callable shaders, invoked with `CallShader`; may be NULL.
+	/// @param[in] _numCallables Number of callable shaders.
 	/// @param[in] _destroyShaders If true, shaders will be destroyed when program is destroyed.
 	///
 	/// @returns Program handle.
@@ -2662,7 +2667,10 @@ namespace bgfx
 		, const ShaderHandle* _miss
 		, uint16_t _numMiss
 		, const ShaderHandle* _closestHit
+		, const ShaderHandle* _anyHit
 		, uint16_t _numHitGroups
+		, const ShaderHandle* _callable
+		, uint16_t _numCallables
 		, bool _destroyShaders = false
 		);
 
