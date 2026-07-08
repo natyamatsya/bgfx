@@ -875,11 +875,23 @@ namespace bgfx
 		}
 	}
 
-	static Slang::ComPtr<slang::ISession> createSlangSession(slang::IGlobalSession* _global, int32_t _uboBinding, bx::WriterI* _messageWriter)
+	static Slang::ComPtr<slang::ISession> createSlangSession(slang::IGlobalSession* _global, ShadingLang::Enum _targetLang, uint32_t _profileId, int32_t _uboBinding, bx::WriterI* _messageWriter)
 	{
 		slang::TargetDesc target = {};
-		target.format  = SLANG_SPIRV;
-		target.profile = _global->findProfile("spirv_1_5");
+		if (ShadingLang::Dxil == _targetLang)
+		{
+			// DXIL via Slang's native backend (requires libdxcompiler at runtime).
+			// Shader-model profile from the bgfx profile id: 650 -> "sm_6_5".
+			target.format = SLANG_DXIL;
+			char profileName[16];
+			bx::snprintf(profileName, sizeof(profileName), "sm_%d_%d", _profileId/100, (_profileId%100)/10);
+			target.profile = _global->findProfile(profileName);
+		}
+		else
+		{
+			target.format  = SLANG_SPIRV;
+			target.profile = _global->findProfile("spirv_1_5");
+		}
 		// bgfx runs its own spirv-opt; skip Slang's (its optimizer lives in the
 		// slang-glslang companion we intentionally do not vendor).
 		target.flags = 0;
@@ -913,8 +925,14 @@ namespace bgfx
 			bindShifts[ii].value.intValue0 = shifts[ii].kind;
 			bindShifts[ii].value.intValue1 = shifts[ii].shift;
 		}
-		sd.compilerOptionEntries    = bindShifts;
-		sd.compilerOptionEntryCount = BX_COUNTOF(bindShifts);
+		if (ShadingLang::Dxil != _targetLang)
+		{
+			sd.compilerOptionEntries    = bindShifts;
+			sd.compilerOptionEntryCount = BX_COUNTOF(bindShifts);
+		}
+		// DXIL: no shifts -- HLSL register() assignments pass through natively, which
+		// IS the bgfx D3D binding convention (the "DXIL analog of the SPIR-V shift
+		// design" from RT_WINDOWS_ROADMAP.md M1 is the identity mapping).
 
 		Slang::ComPtr<slang::ISession> session;
 		if (SLANG_FAILED(_global->createSession(sd, session.writeRef() ) )
@@ -1065,7 +1083,7 @@ namespace bgfx
 
 	// Reflects the live global uniforms, samplers and storage resources into _uniforms,
 	// warning about live globals whose type bgfx does not map.
-	static void reflectUniforms(const SlangDll& _slang, SlangReflection* _reflect, slang::IBlob* _spirv, int32_t _uboBinding, UniformArray& _uniforms, bx::WriterI* _messageWriter)
+	static void reflectUniforms(const SlangDll& _slang, SlangReflection* _reflect, slang::IBlob* _spirv, int32_t _uboBinding, bool _dxil, UniformArray& _uniforms, bx::WriterI* _messageWriter)
 	{
 		SlangReflectionVariableLayout* globalVar = _slang.Reflection_getGlobalParamsVarLayout(_reflect);
 		if (NULL == globalVar)
@@ -1096,7 +1114,9 @@ namespace bgfx
 		// once -fvk-*-shift is applied, so gate each field on the generated SPIR-V: an unused
 		// UBO or texture is dead-stripped from the entry point. Loose uniforms share the
 		// stage's UBO binding; each texture has its own (logical register + kSpirvBindShift).
-		const bool uboUsed = spirvHasBinding(_spirv, (uint32_t)_uboBinding);
+		// DXIL: there is no SPIR-V to strip dead globals against; the envelope keeps
+		// every declared global (liveness gating for DXIL is a follow-up).
+		const bool uboUsed = _dxil || spirvHasBinding(_spirv, (uint32_t)_uboBinding);
 
 		const unsigned fieldCount = _slang.TypeLayout_GetFieldCount(structTl);
 		for (unsigned ii = 0; ii < fieldCount; ++ii)
@@ -1121,11 +1141,29 @@ namespace bgfx
 
 			if (SLANG_TYPE_KIND_RESOURCE == fieldKind)
 			{
-				// Binding (and liveness) come from the SPIR-V by name.
-				const uint32_t binding = spirvBindingForName(_spirv, name);
-				if (UINT32_MAX == binding)
+				uint32_t binding;
+				if (_dxil)
 				{
-					continue;
+					// D3D register class from the resource access: read-only (sampled
+					// textures, StructuredBuffer, acceleration structures) = SRV (t#),
+					// read-write = UAV (u#). The register number is Slang's layout
+					// offset in that category -- exactly the register() the shader
+					// declares, per the pass-through convention above.
+					SlangReflectionType* resType = _slang.TypeLayout_GetType(_slang.VariableLayout_GetTypeLayout(field) );
+					const bool uav = SLANG_RESOURCE_ACCESS_READ != _slang.Type_GetResourceAccess(resType);
+					binding = (uint32_t)_slang.VariableLayout_GetOffset(
+						  field
+						, uav ? SLANG_PARAMETER_CATEGORY_UNORDERED_ACCESS : SLANG_PARAMETER_CATEGORY_SHADER_RESOURCE
+						);
+				}
+				else
+				{
+					// Binding (and liveness) come from the SPIR-V by name.
+					binding = spirvBindingForName(_spirv, name);
+					if (UINT32_MAX == binding)
+					{
+						continue;
+					}
 				}
 
 				if (toSamplerUniform(_slang, field, un, _spirv, name) )
@@ -1492,9 +1530,20 @@ namespace bgfx
 		// either the SPIR-V/Vulkan envelope directly, or the Metal envelope via SPIRV-Cross
 		// (shared with the stock glslang Metal backend). Other targets are not wired yet.
 		if (ShadingLang::SpirV != _targetLang
-		&&  ShadingLang::Metal != _targetLang)
+		&&  ShadingLang::Metal != _targetLang
+		&&  ShadingLang::Dxil  != _targetLang)
 		{
-			bx::write(_messageWriter, &messageErr, "Error: the Slang front-end currently supports only the SPIR-V and Metal targets.\n");
+			bx::write(_messageWriter, &messageErr, "Error: the Slang front-end currently supports only the SPIR-V, Metal and DXIL targets.\n");
+			return false;
+		}
+
+		// DXIL scope (RT_WINDOWS_ROADMAP.md M1): compute and the six ray-tracing
+		// stages. Graphics stages need the attribute/varying conventions of the D3D12
+		// backend and arrive with that work.
+		if (ShadingLang::Dxil == _targetLang
+		&&  ('v' == _options.shaderType || 'f' == _options.shaderType) )
+		{
+			bx::write(_messageWriter, &messageErr, "Error: the DXIL target currently supports compute and ray-tracing shaders only.\n");
 			return false;
 		}
 
@@ -1530,7 +1579,7 @@ namespace bgfx
 		// fragment stage, which uses the fragment slot (matching the SPIR-V backend).
 		const int32_t uboBinding = ('f' == _options.shaderType) ? kSpirvFragmentBinding : kSpirvVertexBinding;
 
-		Slang::ComPtr<slang::ISession> session = createSlangSession(global, uboBinding, _messageWriter);
+		Slang::ComPtr<slang::ISession> session = createSlangSession(global, _targetLang, _version, uboBinding, _messageWriter);
 		if (!session)
 		{
 			return false;
@@ -1579,7 +1628,7 @@ namespace bgfx
 		}
 
 		UniformArray uniforms;
-		reflectUniforms(slang, layout, spirvBlob, uboBinding, uniforms, _messageWriter);
+		reflectUniforms(slang, layout, spirvBlob, uboBinding, ShadingLang::Dxil == _targetLang, uniforms, _messageWriter);
 
 		std::vector<uint16_t> attrIds;
 		if ('v' == _options.shaderType)

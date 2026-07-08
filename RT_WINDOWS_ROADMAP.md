@@ -57,7 +57,7 @@ The two genuinely new problems:
   lavapipe. (The linux-arm container rig stays the primary referee.)
 - Exit: `rt_smoke` 4/4 and `rt_pipeline_smoke` 3/3 green on Windows/VK.
 
-### M1 — shaderc DXIL target
+### M1 — shaderc DXIL target ✅ (compiler side landed; envelope consumed in M2)
 *Slang → DXIL envelopes for compute and all six RT stages, compiled from any host OS.*
 
 - Wire `SLANG_DXIL` beside SPIR-V/Metal in `shaderc_slang.cpp`; dxcompiler integration;
@@ -68,6 +68,17 @@ The two genuinely new problems:
 - Envelope: DXIL code blob + the same reflection tables; runtime selects by blob format.
 - Exit: the whole RT test-shader corpus (and the compliance suite) emits DXIL envelopes
   from the macOS host; spot-validated with dxc disassembly.
+- **Status**: landed on `experimental/shaderc-dxil`. All six RT stages + ray-query
+  compute + the Cornell Box tracer emit DXIL envelopes from macOS (`-p s_6_5
+  --platform windows`); dxc disassembly confirms the pass-through register convention
+  (`scene t0`, `s_target u1`, ... — the identity mapping IS the D3D convention, no
+  shift design needed); envelope reflection carries raw registers + cbuffer byte
+  offsets. Zero drift on the SPIR-V/Metal paths (byte-identical output vs the
+  unpatched compiler, same libslang). Graphics stages (v/f) are cleanly rejected until
+  the D3D12 backend work defines their conventions. Found along the way: libslang
+  2025.23 silently ignores `VulkanBindShiftAll` (wrong SPIR-V bindings, no error) —
+  the Slang front-end needs libslang ≥ 2026.x; a loader-side version check is a
+  hardening follow-up.
 
 ### M2 — D3D12 acceleration structures + inline ray query
 *The `RT_ROADMAP.md` phase-3/4 equivalent for D3D12.*
