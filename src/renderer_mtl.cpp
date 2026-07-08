@@ -13,6 +13,7 @@
 #include <metal-cpp/metal.hpp>
 
 #include "renderer_mtl.h"
+#include "shader.h"
 #include "video_mtl.h"
 #include "renderer.h"
 #include <bx/macros.h>
@@ -839,6 +840,26 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 #define SHADER_FUNCTION_NAME "xlatMtlMain"
 #define SHADER_UNIFORM_NAME  "_mtl_u"
 
+	// Slang's Metal backend suffixes every emitted name with _<n>; strip it so
+	// reflection-provided names match bgfx uniform/envelope names.
+	static const char* stripSlangSuffix(const char* _name, char* _tmp, int32_t _tmpSize)
+	{
+		const int32_t len = bx::strLen(_name);
+		int32_t cut = len;
+		while (cut > 0 && bx::isNumeric(_name[cut-1]) )
+		{
+			--cut;
+		}
+		if (cut < len && cut > 0 && '_' == _name[cut-1])
+		{
+			const int32_t copy = bx::min(cut-1, _tmpSize-1);
+			bx::memCopy(_tmp, _name, copy);
+			_tmp[copy] = '\0';
+			return _tmp;
+		}
+		return _name;
+	}
+
 	struct ChunkedScratchBufferOffset
 	{
 		MTL::Buffer* buffer;
@@ -1053,6 +1074,15 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 
 			g_caps.supported |= m_device->supportsRaytracing()
 				? BGFX_CAPS_RAY_TRACING
+				: 0
+				;
+
+			// The ray-tracing pipeline (createRtProgram) runs on visible function
+			// tables; it additionally needs function pointers and the Metal-3
+			// resource-ID argument-buffer encoding used by the slang_RTGlobals
+			// contract.
+			g_caps.supported |= (m_device->supportsRaytracing() && m_device->supportsFunctionPointers() )
+				? BGFX_CAPS_RAY_TRACING_PIPELINE
 				: 0
 				;
 
@@ -1424,7 +1454,131 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 
 		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, const ShaderHandle* _intersection, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) override
 		{
-			BX_UNUSED(_handle, _rayGen, _miss, _numMiss, _closestHit, _anyHit, _intersection, _numHitGroups, _callable, _numCallables);
+			// v1 scope: miss + triangle closest-hit groups (the Slang Metal backend's
+			// P0-P4 feature set minus intersection-function tables in bgfx envelopes).
+			BX_UNUSED(_anyHit, _intersection, _callable, _numCallables);
+
+			ProgramMtl& program = m_program[_handle.idx];
+			const ShaderMtl& rayGen = m_shaders[_rayGen.idx];
+			program.m_vsh = &rayGen;
+			program.m_numRtMiss = uint8_t(_numMiss);
+			program.m_numRtHit  = uint8_t(_numHitGroups);
+
+			// Linked stage functions.
+			const NS::Object* fns[8];
+			uint16_t numFns = 0;
+			for (uint16_t ii = 0; ii < _numMiss; ++ii)
+			{
+				program.m_rtMiss[ii] = &m_shaders[_miss[ii].idx];
+				fns[numFns++] = program.m_rtMiss[ii]->m_function;
+			}
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
+			{
+				program.m_rtHit[ii] = &m_shaders[_closestHit[ii].idx];
+				fns[numFns++] = program.m_rtHit[ii]->m_function;
+			}
+
+			MTL::LinkedFunctions* linked = MTL::LinkedFunctions::alloc()->init();
+			linked->setFunctions(NS::Array::array(fns, numFns) );
+
+			MTL::ComputePipelineDescriptor* pd = MTL::ComputePipelineDescriptor::alloc()->init();
+			pd->setComputeFunction(rayGen.m_function);
+			pd->setLinkedFunctions(linked);
+			pd->setMaxCallStackDepth(3); // kernel -> handler -> nested handler
+
+			NS::Error* error = NULL;
+			MTL::ComputePipelineReflection* reflection = NULL;
+			MTL::ComputePipelineState* cps = m_device->newComputePipelineState(
+				  pd
+				, MTL::PipelineOptionBufferTypeInfo
+				, &reflection
+				, &error
+				);
+			BGFX_FATAL(NULL != cps, Fatal::UnableToInitialize
+				, "RT pipeline creation failed: %s"
+				, NULL != error ? error->localizedDescription()->utf8String() : "?"
+				);
+			linked->release();
+			pd->release();
+
+			// Uniforms/predefined from the kernel reflection (Slang RT naming rules).
+			PipelineStateMtl* pso = BX_NEW(g_allocator, PipelineStateMtl);
+			pso->m_cps = cps;
+			program.m_computePS = pso;
+			NS::Array* args = m_usesMTLBindings ? reflection->bindings() : reflection->arguments();
+			processArguments(pso, args, NULL, true /*slangRT*/);
+
+			// Kernel user bindings: join reflection names (suffix-stripped) with the
+			// raygen envelope's resource records (name -> bgfx stage).
+			for (NS::UInteger argIdx = 0, argCount = args->count(); argIdx < argCount; ++argIdx)
+			{
+				MTL::Argument* arg = (MTL::Argument*)args->object(argIdx);
+				char tmp[64];
+				const char* name = stripSlangSuffix(utf8String(arg->name() ), tmp, sizeof(tmp) );
+				for (uint8_t ri = 0; ri < rayGen.m_numRTResources; ++ri)
+				{
+					if (0 == bx::strCmp(name, rayGen.m_rtResources[ri].m_name)
+					&&  program.m_numRtKernelArgs < BX_COUNTOF(program.m_rtKernelArgs) )
+					{
+						ProgramMtl::RTKernelArg& ka = program.m_rtKernelArgs[program.m_numRtKernelArgs++];
+						ka.m_stage   = rayGen.m_rtResources[ri].m_stage;
+						ka.m_index   = (uint16_t)arg->index();
+						ka.m_texture = (NS::UInteger)arg->type() == MTL::BindingTypeTexture;
+						break;
+					}
+				}
+			}
+
+			// SBT records: miss shaders first, then the hit groups.
+			MTL::VisibleFunctionTableDescriptor* vtd = MTL::VisibleFunctionTableDescriptor::alloc()->init();
+			vtd->setFunctionCount(numFns);
+			program.m_vft = cps->newVisibleFunctionTable(vtd);
+			vtd->release();
+			for (uint16_t ii = 0; ii < numFns; ++ii)
+			{
+				program.m_vft->setFunction(cps->functionHandle( (MTL::Function*)fns[ii]), ii);
+			}
+
+			program.m_instOffsets = m_device->newBuffer(sizeof(uint32_t)*BGFX_CONFIG_MAX_TLAS_INSTANCES, MTL::ResourceStorageModeShared);
+			bx::memSet(program.m_instOffsets->contents(), 0, sizeof(uint32_t)*BGFX_CONFIG_MAX_TLAS_INSTANCES);
+
+			// The software SBT (metal_rt_pipeline_p0 contract): region bases + the
+			// per-instance contributions' device address.
+			struct SbtLayout
+			{
+				uint32_t missBase, hitBase, callableBase, hitStride;
+				uint64_t instanceSbtOffsets;
+			};
+			program.m_sbtBuf = m_device->newBuffer(sizeof(SbtLayout), MTL::ResourceStorageModeShared);
+			SbtLayout* sbt = (SbtLayout*)program.m_sbtBuf->contents();
+			sbt->missBase = 0;
+			sbt->hitBase = _numMiss;
+			sbt->callableBase = _numMiss + _numHitGroups;
+			sbt->hitStride = 1;
+			sbt->instanceSbtOffsets = program.m_instOffsets->gpuAddress();
+
+			// slang_RTGlobals (metal_rt_pipeline_p3 contract): the 40-byte dispatch
+			// header + one 8-byte slot per hoisted handler resource. The tail layout
+			// is defined by the first handler that hoists anything (v1: all handlers
+			// must agree, which one-module-per-stage compilation guarantees when the
+			// resource-using handler is unique -- the Cornell shape).
+			program.m_rtGlobalsOwner = NULL;
+			for (uint16_t ii = 0; ii < numFns; ++ii)
+			{
+				const ShaderMtl* sh = ii < _numMiss ? program.m_rtMiss[ii] : program.m_rtHit[ii - _numMiss];
+				if (sh->m_rtGlobalsTailCount > 0)
+				{
+					program.m_rtGlobalsOwner = sh;
+					break;
+				}
+			}
+			const uint32_t tailCount = NULL != program.m_rtGlobalsOwner ? program.m_rtGlobalsOwner->m_rtGlobalsTailCount : 0;
+			program.m_globalsBuf = m_device->newBuffer(40 + 8*tailCount, MTL::ResourceStorageModeShared);
+			uint8_t* g = (uint8_t*)program.m_globalsBuf->contents();
+			bx::memSet(g, 0, 40 + 8*tailCount);
+			const uint64_t vftId = program.m_vft->gpuResourceID()._impl;
+			bx::memCopy(g + 0, &vftId, 8);
+			bx::memCopy(g + 16, sbt, 24);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
@@ -2889,6 +3043,7 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			  PipelineStateMtl* ps
 			, NS::Array* _vertexArgs
 			, NS::Array* _fragmentArgs
+			, bool _slangRT = false
 			)
 		{
 			ps->m_numPredefined = 0;
@@ -2924,9 +3079,17 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 					{
 						if ( (NS::UInteger)arg->type() == MTL::BindingTypeBuffer)
 						{
-							if (0 == bx::strCmp(utf8String(arg->name() ), SHADER_UNIFORM_NAME) )
+							// Slang-native RT kernels: the implicit constant buffer is named
+							// globalParams_<n> and its Metal slot follows Slang's layout;
+							// record the slot so the dispatch binds the uniform scratch there.
+							const bool isUniformBuffer = _slangRT
+								? !bx::strFind(utf8String(arg->name() ), "globalParams").isEmpty()
+								: 0 == bx::strCmp(utf8String(arg->name() ), SHADER_UNIFORM_NAME)
+								;
+							if (isUniformBuffer)
 							{
-								BX_ASSERT(arg->index() == 0, "Uniform buffer must be in the buffer slot 0.");
+								ps->m_uniformBufferIndex = (uint8_t)arg->index();
+								BX_ASSERT(_slangRT || arg->index() == 0, "Uniform buffer must be in the buffer slot 0.");
 
 								BX_ASSERT(
 									  MTL::DataTypeStruct == arg->bufferDataType()
@@ -2954,7 +3117,12 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 									for (NS::UInteger mi = 0, mc = NULL != members ? members->count() : 0; mi < mc; ++mi)
 									{
 										MTL::StructMember* uniform = (MTL::StructMember*)members->object(mi);
+										char nameTmp[256];
 										const char* name = utf8String(uniform->name() );
+										if (_slangRT)
+										{
+											name = stripSlangSuffix(name, nameTmp, sizeof(nameTmp) );
+										}
 										BX_TRACE("uniform: %s type:%d", name, uniform->dataType() );
 
 										MTL::DataType dataType = uniform->dataType();
@@ -3491,6 +3659,116 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				);
 		}
 
+		// Ray-tracing dispatch (contract of tools/rt-validation/metal_rt_pipeline_p*):
+		// bind the kernel's user resources at their reflected slots, encode the
+		// slang_RTGlobals argument buffer (dispatch header + hoisted handler
+		// resources), set the fixed system bindings, and trace -- the dispatch
+		// dimensions are rays.
+		void submitRayTracingDispatch(ProgramMtl& _program, const RenderCompute& _compute, const RenderBind& _renderBind)
+		{
+			for (uint8_t ii = 0; ii < _program.m_numRtKernelArgs; ++ii)
+			{
+				const ProgramMtl::RTKernelArg& ka = _program.m_rtKernelArgs[ii];
+				const Binding& bind = _renderBind.m_bind[ka.m_stage];
+				if (kInvalidHandle == bind.m_idx)
+				{
+					continue;
+				}
+				switch (bind.m_type)
+				{
+				case Binding::Image:
+					m_computeCommandEncoder->setTexture(m_textures[bind.m_idx].getTextureImage(bind.m_firstMip, bind.m_firstLayer, bind.m_numLayers), ka.m_index);
+					break;
+				case Binding::IndexBuffer:
+				case Binding::VertexBuffer:
+					{
+						const BufferMtl& buffer = Binding::IndexBuffer == bind.m_type
+							? m_indexBuffers[bind.m_idx]
+							: m_vertexBuffers[bind.m_idx]
+							;
+						m_computeCommandEncoder->setBuffer(buffer.m_ptr, 0, ka.m_index);
+					}
+					break;
+				case Binding::AccelerationStructure:
+					{
+						const AccelerationStructureMtl& as = m_accelerationStructures[bind.m_idx];
+						m_computeCommandEncoder->setAccelerationStructure(as.m_accelerationStructure, ka.m_index);
+						useAccelerationStructureResources(as);
+					}
+					break;
+				default:
+					break;
+				}
+			}
+
+			// Hoisted handler resources into the globals tail (8 bytes per slot:
+			// device address for buffers, gpuResourceID for everything else).
+			if (NULL != _program.m_rtGlobalsOwner)
+			{
+				uint8_t* globals = (uint8_t*)_program.m_globalsBuf->contents();
+				const ShaderMtl* owner = _program.m_rtGlobalsOwner;
+				for (uint8_t ti = 0; ti < owner->m_rtGlobalsTailCount; ++ti)
+				{
+					const ShaderMtl::RTResource& res = owner->m_rtResources[owner->m_rtGlobalsTail[ti]];
+					const Binding& bind = _renderBind.m_bind[res.m_stage];
+					uint64_t value = 0;
+					if (kInvalidHandle != bind.m_idx)
+					{
+						switch (bind.m_type)
+						{
+						case Binding::IndexBuffer:
+						case Binding::VertexBuffer:
+							{
+								const BufferMtl& buffer = Binding::IndexBuffer == bind.m_type
+									? m_indexBuffers[bind.m_idx]
+									: m_vertexBuffers[bind.m_idx]
+									;
+								value = buffer.m_ptr->gpuAddress();
+								m_computeCommandEncoder->useResource(buffer.m_ptr, MTL::ResourceUsageRead);
+							}
+							break;
+						case Binding::AccelerationStructure:
+							{
+								const AccelerationStructureMtl& as = m_accelerationStructures[bind.m_idx];
+								value = as.m_accelerationStructure->gpuResourceID()._impl;
+								useAccelerationStructureResources(as);
+							}
+							break;
+						case Binding::Image:
+							value = m_textures[bind.m_idx].getTextureImage(bind.m_firstMip, bind.m_firstLayer, bind.m_numLayers)->gpuResourceID()._impl;
+							m_computeCommandEncoder->useResource(m_textures[bind.m_idx].m_ptr, MTL::ResourceUsageRead);
+							break;
+						default:
+							break;
+						}
+					}
+					bx::memCopy(globals + 40 + 8*ti, &value, 8);
+				}
+			}
+
+			m_computeCommandEncoder->setBuffer(_program.m_globalsBuf, 0, 28);
+			m_computeCommandEncoder->setBuffer(_program.m_sbtBuf, 0, 29);
+			m_computeCommandEncoder->setVisibleFunctionTable(_program.m_vft, 30);
+			m_computeCommandEncoder->useResource(_program.m_vft, MTL::ResourceUsageRead);
+			m_computeCommandEncoder->useResource(_program.m_instOffsets, MTL::ResourceUsageRead);
+
+			m_computeCommandEncoder->dispatchThreads(
+				  MTL::Size::Make(_compute.m_numX, _compute.m_numY, _compute.m_numZ)
+				, MTL::Size::Make(8, 8, 1)
+				);
+		}
+
+		// Acceleration structures bound anywhere (directly or through the globals
+		// argument buffer) must be resident, along with every BLAS a TLAS references.
+		void useAccelerationStructureResources(const AccelerationStructureMtl& _as)
+		{
+			m_computeCommandEncoder->useResource(_as.m_accelerationStructure, MTL::ResourceUsageRead);
+			for (uint16_t blasIdx = 0; blasIdx < _as.m_numInstances; ++blasIdx)
+			{
+				m_computeCommandEncoder->useResource(_as.m_blasList[blasIdx], MTL::ResourceUsageRead);
+			}
+		}
+
 		PipelineStateMtl* getComputePipelineState(ProgramHandle _program)
 		{
 			ProgramMtl& program = m_program[_program.idx];
@@ -3949,6 +4227,57 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		bx::write(_writer, _str, (int32_t)bx::strLen(_str), bx::ErrorAssert{});
 	}
 
+	// Handler stages: the slang_RTGlobals field order after the 3-field dispatch
+	// header IS the argument-buffer layout of the hoisted resources (see
+	// METAL_RT_PIPELINE.md and the metal_rt_pipeline_p3 contract). Recover it by
+	// name from the emitted struct -- the Slang backend pins field names to the
+	// user's parameter names precisely so this join is possible.
+	static void parseRtGlobalsTail(ShaderMtl& _shader, const char* _code, uint32_t _size)
+	{
+		const bx::StringView codeView(_code, (int32_t)_size);
+		const bx::StringView structStart = bx::strFind(codeView, "struct slang_RTGlobals\n{");
+		if (structStart.isEmpty() )
+		{
+			return;
+		}
+
+		bx::StringView cursor(structStart.getTerm(), codeView.getTerm() );
+		const bx::StringView structEnd = bx::strFind(cursor, "};");
+		int lineIdx = 0;
+		while (cursor.getPtr() < structEnd.getPtr() )
+		{
+			const bx::StringView eol = bx::strFind(cursor, "\n");
+			if (eol.isEmpty() || eol.getPtr() > structEnd.getPtr() )
+			{
+				break;
+			}
+			const bx::StringView line(cursor.getPtr(), eol.getPtr() );
+			if (++lineIdx > 3) // skip the handlers/isect/sbt dispatch header
+			{
+				// Field name = the last identifier before ';'.
+				const bx::StringView semi = bx::strFind(line, ";");
+				if (!semi.isEmpty() )
+				{
+					const char* nameEnd = semi.getPtr();
+					const char* nameBegin = nameEnd;
+					while (nameBegin > line.getPtr() && (bx::isAlphaNum(nameBegin[-1]) || '_' == nameBegin[-1]) )
+					{
+						--nameBegin;
+					}
+					for (uint8_t ri = 0; ri < _shader.m_numRTResources && _shader.m_rtGlobalsTailCount < BX_COUNTOF(_shader.m_rtGlobalsTail); ++ri)
+					{
+						if (0 == bx::strCmp(bx::StringView(nameBegin, nameEnd), _shader.m_rtResources[ri].m_name) )
+						{
+							_shader.m_rtGlobalsTail[_shader.m_rtGlobalsTailCount++] = ri;
+							break;
+						}
+					}
+				}
+			}
+			cursor.set(eol.getTerm(), codeView.getTerm() );
+		}
+	}
+
 	void ShaderMtl::create(const Memory* _mem)
 	{
 		bx::MemoryReader reader(_mem->data, _mem->size);
@@ -3986,6 +4315,8 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			, count
 			);
 
+	m_isRayTracing = isRayTracingShaderType(magic);
+
 		for (uint32_t ii = 0; ii < count; ++ii)
 		{
 			uint8_t nameSize;
@@ -4018,6 +4349,19 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				uint16_t texFormat = 0;
 				bx::read(&reader, texFormat, &err);
 			}
+
+			// Ray-tracing stages: keep the resource records. regIndex is the source
+			// register() -- the bgfx stage; regCount carries the descriptor-type id.
+			if (m_isRayTracing
+			&&  UniformType::End == (type & ~(kUniformFragmentBit|kUniformSamplerBit|kUniformReadOnlyBit|kUniformCompareBit) )
+			&&  m_numRTResources < BX_COUNTOF(m_rtResources) )
+			{
+				RTResource& res = m_rtResources[m_numRTResources++];
+				bx::memCopy(res.m_name, name, bx::min<int32_t>(nameSize+1, sizeof(res.m_name) ) );
+				res.m_name[sizeof(res.m_name)-1] = '\0';
+				res.m_stage = regIndex;
+				res.m_descriptorId = regCount;
+			}
 		}
 
 		if (isShaderType(magic, 'C') )
@@ -4034,11 +4378,27 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		const char* code = (const char*)reader.getDataPtr();
 		bx::skip(&reader, shaderSize+1);
 
+	if (m_isRayTracing)
+		{
+			parseRtGlobalsTail(*this, code, shaderSize);
+		}
+
 		MTL::Library* lib = newLibraryWithSource(s_renderMtl->m_device, code);
 
 		if (NULL != lib)
 		{
-			m_function = lib->newFunction(nsstr(SHADER_FUNCTION_NAME) );
+		if (m_isRayTracing)
+			{
+				// One Slang entry point per RT envelope, under its own name.
+				NS::Array* names = lib->functionNames();
+				m_function = 1 == names->count()
+					? lib->newFunction( (NS::String*)names->object(0) )
+					: NULL;
+			}
+			else
+			{
+				m_function = lib->newFunction(nsstr(SHADER_FUNCTION_NAME) );
+			}
 			MTL_RELEASE_W(lib, 0);
 		}
 
@@ -4115,6 +4475,15 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 	{
 		m_vsh = NULL;
 		m_fsh = NULL;
+	MTL_RELEASE_W(m_vft, 0);
+		MTL_RELEASE_W(m_sbtBuf, 0);
+		MTL_RELEASE_W(m_instOffsets, 0);
+		MTL_RELEASE_W(m_globalsBuf, 0);
+		m_numRtMiss = 0;
+		m_numRtHit = 0;
+		m_numRtKernelArgs = 0;
+		m_rtGlobalsOwner = NULL;
+
 		if (NULL != m_computePS)
 		{
 			bx::deleteObject(g_allocator, m_computePS);
@@ -6580,8 +6949,15 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 						{
 							ChunkedScratchBufferOffset sbo;
 							m_uniformScratchBuffer.write(sbo, m_vsScratch, vertexUniformBufferSize);
-							m_computeCommandEncoder->setBuffer(sbo.buffer, sbo.offsets[0], 0);
+							m_computeCommandEncoder->setBuffer(sbo.buffer, sbo.offsets[0], currentPso->m_uniformBufferIndex);
 						}
+					}
+
+					ProgramMtl& csProgram = m_program[currentProgram.idx];
+					if (csProgram.isRayTracing() )
+					{
+						submitRayTracingDispatch(csProgram, compute, renderBind);
+						continue;
 					}
 
 					for (uint8_t stage = 0; stage < maxComputeBindings; ++stage)
