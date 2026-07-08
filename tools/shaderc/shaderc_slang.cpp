@@ -875,7 +875,7 @@ namespace bgfx
 		}
 	}
 
-	static Slang::ComPtr<slang::ISession> createSlangSession(slang::IGlobalSession* _global, ShadingLang::Enum _targetLang, bool _nativeMetalRT, uint32_t _profileId, int32_t _uboBinding, bx::WriterI* _messageWriter)
+	static Slang::ComPtr<slang::ISession> createSlangSession(slang::IGlobalSession* _global, ShadingLang::Enum _targetLang, bool _nativeMetalRT, uint32_t _metalRtGlobalsSlots, uint32_t _profileId, int32_t _uboBinding, bx::WriterI* _messageWriter)
 	{
 		slang::TargetDesc target = {};
 		if (ShadingLang::Metal == _targetLang && _nativeMetalRT)
@@ -934,8 +934,21 @@ namespace bgfx
 			bindShifts[ii].value.intValue0 = shifts[ii].kind;
 			bindShifts[ii].value.intValue1 = shifts[ii].shift;
 		}
-		if (ShadingLang::Dxil != _targetLang
-		&&  !(ShadingLang::Metal == _targetLang && _nativeMetalRT) )
+		slang::CompilerOptionEntry metalRtOptions[2] = {};
+		if (ShadingLang::Metal == _targetLang && _nativeMetalRT)
+		{
+			// The runtime contract's cross-module ABI flags (R2): the slot-addressed
+			// globals layout, and silencing the D3D-register-without-vulkan-binding
+			// warning that register() triggers on Metal-only compiles.
+			metalRtOptions[0].name = slang::CompilerOptionName::MetalRTGlobalsSlots;
+			metalRtOptions[0].value.intValue0 = (int32_t)_metalRtGlobalsSlots;
+			metalRtOptions[1].name = slang::CompilerOptionName::DisableWarning;
+			metalRtOptions[1].value.kind = slang::CompilerOptionValueKind::String;
+			metalRtOptions[1].value.stringValue0 = "39029";
+			sd.compilerOptionEntries    = metalRtOptions;
+			sd.compilerOptionEntryCount = BX_COUNTOF(metalRtOptions);
+		}
+		else if (ShadingLang::Dxil != _targetLang)
 		{
 			sd.compilerOptionEntries    = bindShifts;
 			sd.compilerOptionEntryCount = BX_COUNTOF(bindShifts);
@@ -1705,7 +1718,7 @@ namespace bgfx
 		const bool nativeMetalRT = ShadingLang::Metal == _targetLang
 			&& NULL != bx::strFind("riahml", _options.shaderType).getPtr();
 
-		Slang::ComPtr<slang::ISession> session = createSlangSession(global, _targetLang, nativeMetalRT, _version, uboBinding, _messageWriter);
+		Slang::ComPtr<slang::ISession> session = createSlangSession(global, _targetLang, nativeMetalRT, _options.metalRtGlobalsSlots, _version, uboBinding, _messageWriter);
 		if (!session)
 		{
 			return false;

@@ -201,6 +201,7 @@ namespace bgfx
 		bool raw;
 		bool slang;
 		bool slangNoPredefined; // Slang: don't auto-declare bgfx predefined uniforms.
+		uint32_t metalRtGlobalsSlots; // Slang Metal RT: -metal-rt-globals-slots N (0 = usage-derived).
 		bool preprocessOnly;
 		bool keepComments;
 		bool depends;
