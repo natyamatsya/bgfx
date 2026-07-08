@@ -1716,7 +1716,7 @@ namespace bgfx
 
 		// Ray-tracing pipeline stages on Metal use Slang's native Metal backend.
 		const bool nativeMetalRT = ShadingLang::Metal == _targetLang
-			&& NULL != bx::strFind("riahml", _options.shaderType).getPtr();
+			&& !bx::strFind("riahml", _options.shaderType).isEmpty();
 
 		Slang::ComPtr<slang::ISession> session = createSlangSession(global, _targetLang, nativeMetalRT, _options.metalRtGlobalsSlots, _version, uboBinding, _messageWriter);
 		if (!session)
