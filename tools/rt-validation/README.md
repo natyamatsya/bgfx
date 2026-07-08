@@ -29,6 +29,17 @@ dispatch) without a window, on any backend reporting `BGFX_CAPS_RAY_TRACING`.
   Phase 3 covers procedural intersection: a sphere inside an AABB BLAS
   (`bgfx::createBlasAabbs`); the intersection shader reports the analytic entry point and
   the closest-hit stage validates the reported t (`rt_pipe_{isect,chit3}.slang`).
+- `metal_rt_host.h` — shared host helpers (MSL loading, stage-function lookup,
+  AS building, the software-SBT layout) used by the p1/p4 hosts; p0/p3 predate it
+  and stay self-contained.
+- `p5/rt_p5_transforms.slang` — the transforms-phase module (ObjectToWorld/
+  WorldToObject/ObjectRay* under a translated instance); runs on the p4 host.
+- `metal_rt_pipeline_p{0,1,3,4}.cpp` + `p0/ p1/ p3/ p4/` — the staged on-device
+  proofs of the Slang-native Metal RT pipeline (compiler side: the Slang fork's
+  `metal-rt-impl` branch, `github.com/natyamatsya/slang`): P0 raygen/miss/chit +
+  runtime contract, P1 anyhit/intersection function tables, P3 recursion + the
+  `slang_RTGlobals` argument buffer, P4 world-space semantics under instance
+  transforms. Compile the stage modules with that fork's `slangc -target metal`.
 - `metal_rt_pipeline_spike.cpp` — standalone (raw metal-cpp, no bgfx) on-device proof
   that the RT pipeline model maps onto Metal visible-function + intersection-function
   tables; see `METAL_RT_PIPELINE.md`. Build:
