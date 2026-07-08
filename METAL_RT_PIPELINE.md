@@ -3,7 +3,9 @@
 > Status: **SHIPPED end-to-end** (2026-07): the codegen this document asked for was
 > implemented in the Slang fork -- branch **`metal-rt-impl`** of
 > `github.com/natyamatsya/slang` (spec in `docs/design/metal-raytracing.md` on
-> `metal-rt-spec`; implementation P0..P4, commits `55cc3316..d4d30cb0`) -- and bgfx's
+> `metal-rt-spec`; implementation P0..P4 + instance transforms + the payload-size
+> option, pay-for-use world_space_data + the cross-module force options,
+> commits `55cc3316..d8de004d`) -- and bgfx's
 > shaderc + Metal backend now run the 52-cornellbox RT-pipeline stage on Metal.
 > Building the Metal RT shaders requires that compiler: point shaderc's dynamic
 > libslang at the fork's build (`DYLD_LIBRARY_PATH=<slang>/build/Release/lib`).
