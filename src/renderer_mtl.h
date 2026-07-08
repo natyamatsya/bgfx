@@ -355,6 +355,22 @@ namespace bgfx { namespace mtl
 		MTL::Function* m_function;
 		uint32_t m_hash;
 		uint16_t m_numThreads[3];
+
+		// Ray-tracing stages only (Slang-native MSL envelopes). The envelope's
+		// resource records carry the source register() number -- the bgfx stage the
+		// application binds to; the runtime joins them with pipeline reflection
+		// (kernel arguments) or the emitted slang_RTGlobals field order (handlers).
+		struct RTResource
+		{
+			char     m_name[32];
+			uint16_t m_stage;
+			uint16_t m_descriptorId; // descriptorTypeToId(...) from the envelope regCount
+		};
+		RTResource m_rtResources[8];
+		uint8_t m_numRTResources = 0;
+		uint8_t m_rtGlobalsTail[8]; // indices into m_rtResources, in slang_RTGlobals field order
+		uint8_t m_rtGlobalsTailCount = 0;
+		bool m_isRayTracing = false;
 	};
 
 	struct PipelineStateMtl;
@@ -379,6 +395,31 @@ namespace bgfx { namespace mtl
 		const ShaderMtl* m_fsh;
 
 		PipelineStateMtl* m_computePS;
+
+		// Ray-tracing programs (see createRtProgram): the raygen kernel drives an
+		// intersector; miss/closest-hit shaders are [[visible]] functions dispatched
+		// through m_vft; the software SBT and the slang_RTGlobals argument buffer
+		// implement the contract validated by tools/rt-validation/metal_rt_pipeline_p*.
+		const ShaderMtl* m_rtMiss[4] = {};
+		const ShaderMtl* m_rtHit[4] = {};
+		uint8_t m_numRtMiss = 0;
+		uint8_t m_numRtHit = 0;
+		MTL::VisibleFunctionTable* m_vft = NULL;
+		MTL::Buffer* m_sbtBuf = NULL;
+		MTL::Buffer* m_instOffsets = NULL;
+		MTL::Buffer* m_globalsBuf = NULL;
+		const ShaderMtl* m_rtGlobalsOwner = NULL; // handler whose tail defines the globals layout
+
+		struct RTKernelArg
+		{
+			uint16_t m_stage;
+			uint16_t m_index;   // Metal buffer or texture index, from pipeline reflection
+			bool     m_texture;
+		};
+		RTKernelArg m_rtKernelArgs[8];
+		uint8_t m_numRtKernelArgs = 0;
+
+		bool isRayTracing() const { return NULL != m_vft; }
 	};
 
 	struct PipelineStateMtl
@@ -394,6 +435,7 @@ namespace bgfx { namespace mtl
 			, m_rps(NULL)
 			, m_cps(NULL)
 		{
+			m_uniformBufferIndex = 0;
 			m_numThreads[0] = 1;
 			m_numThreads[1] = 1;
 			m_numThreads[2] = 1;
@@ -422,6 +464,7 @@ namespace bgfx { namespace mtl
 			MTL_RELEASE_W(m_cps, 0);
 		}
 
+		uint8_t  m_uniformBufferIndex;
 		UniformBuffer* m_vshConstantBuffer;
 		UniformBuffer* m_fshConstantBuffer;
 

@@ -875,10 +875,19 @@ namespace bgfx
 		}
 	}
 
-	static Slang::ComPtr<slang::ISession> createSlangSession(slang::IGlobalSession* _global, ShadingLang::Enum _targetLang, uint32_t _profileId, int32_t _uboBinding, bx::WriterI* _messageWriter)
+	static Slang::ComPtr<slang::ISession> createSlangSession(slang::IGlobalSession* _global, ShadingLang::Enum _targetLang, bool _nativeMetalRT, uint32_t _profileId, int32_t _uboBinding, bx::WriterI* _messageWriter)
 	{
 		slang::TargetDesc target = {};
-		if (ShadingLang::Dxil == _targetLang)
+		if (ShadingLang::Metal == _targetLang && _nativeMetalRT)
+		{
+			// Ray-tracing pipeline stages: Slang's native Metal backend (the
+			// SPIRV-Cross route has no MSL path for RT execution models). Bindings
+			// are Slang's own Metal layout; the envelope carries the source
+			// register() numbers (the bgfx stage convention) and the runtime
+			// name-matches them into the emitted MSL. No shifts apply.
+			target.format = SLANG_METAL;
+		}
+		else if (ShadingLang::Dxil == _targetLang)
 		{
 			// DXIL via Slang's native backend (requires libdxcompiler at runtime).
 			// Shader-model profile from the bgfx profile id: 650 -> "sm_6_5".
@@ -925,7 +934,8 @@ namespace bgfx
 			bindShifts[ii].value.intValue0 = shifts[ii].kind;
 			bindShifts[ii].value.intValue1 = shifts[ii].shift;
 		}
-		if (ShadingLang::Dxil != _targetLang)
+		if (ShadingLang::Dxil != _targetLang
+		&&  !(ShadingLang::Metal == _targetLang && _nativeMetalRT) )
 		{
 			sd.compilerOptionEntries    = bindShifts;
 			sd.compilerOptionEntryCount = BX_COUNTOF(bindShifts);
@@ -1083,28 +1093,35 @@ namespace bgfx
 
 	// Reflects the live global uniforms, samplers and storage resources into _uniforms,
 	// warning about live globals whose type bgfx does not map.
-	static void reflectUniforms(const SlangDll& _slang, SlangReflection* _reflect, slang::IBlob* _spirv, int32_t _uboBinding, bool _dxil, UniformArray& _uniforms, bx::WriterI* _messageWriter)
+	// The global scope reflects as one struct: the element of the implicit global
+	// constant buffer when loose uniforms exist, or the global params struct itself
+	// (resource-only shaders). Returns NULL when there is nothing to walk.
+	static SlangReflectionTypeLayout* getGlobalParamsStruct(const SlangDll& _slang, SlangReflection* _reflect)
 	{
 		SlangReflectionVariableLayout* globalVar = _slang.Reflection_getGlobalParamsVarLayout(_reflect);
 		if (NULL == globalVar)
 		{
-			return;
+			return NULL;
 		}
-
 		SlangReflectionTypeLayout* globalTl = _slang.VariableLayout_GetTypeLayout(globalVar);
 		SlangTypeKind globalKind = _slang.TypeLayout_getKind(globalTl);
-
-		// Loose uniforms, textures and samplers all appear as fields of one struct:
-		// either the element of the global constant buffer (when uniforms exist) or the
-		// global params struct itself (texture-only shaders).
 		SlangReflectionTypeLayout* structTl =
 			  (SLANG_TYPE_KIND_CONSTANT_BUFFER == globalKind || SLANG_TYPE_KIND_PARAMETER_BLOCK == globalKind)
 			? _slang.TypeLayout_GetElementTypeLayout(globalTl)
 			: globalTl
 			;
-
 		if (NULL == structTl
 		||  SLANG_TYPE_KIND_STRUCT != _slang.TypeLayout_getKind(structTl) )
+		{
+			return NULL;
+		}
+		return structTl;
+	}
+
+	static void reflectUniforms(const SlangDll& _slang, SlangReflection* _reflect, slang::IBlob* _spirv, int32_t _uboBinding, bool _dxil, UniformArray& _uniforms, bx::WriterI* _messageWriter)
+	{
+		SlangReflectionTypeLayout* structTl = getGlobalParamsStruct(_slang, _reflect);
+		if (NULL == structTl)
 		{
 			return;
 		}
@@ -1201,6 +1218,111 @@ namespace bgfx
 				else
 				{
 					warnUnsupportedGlobal(_messageWriter, _slang, field, name);
+				}
+			}
+		}
+	}
+
+	// Parse `<name> : register(tN|uN|sN|bN)` from the source for the given global
+	// name. The bgfx Slang convention requires explicit registers on every RT
+	// resource; the register number IS the bgfx stage the application binds to.
+	static bool findSourceRegister(const std::string& _code, const char* _name, uint16_t& _register)
+	{
+		const bx::StringView code(_code.c_str(), (int32_t)_code.size() );
+		bx::StringView search = code;
+		for (;;)
+		{
+			const bx::StringView name = bx::strFind(search, _name);
+			if (name.isEmpty() )
+			{
+				return false;
+			}
+			search.set(name.getTerm(), code.getTerm() );
+
+			// The declaration's name must be followed (after whitespace) by ':' and
+			// a register annotation.
+			bx::StringView rest = bx::strLTrimSpace(search);
+			if (rest.isEmpty() || ':' != *rest.getPtr() )
+			{
+				continue;
+			}
+			rest = bx::strLTrimSpace(bx::StringView(rest.getPtr() + 1, rest.getTerm() ) );
+			const bx::StringView reg = bx::strFind(bx::StringView(rest.getPtr(), bx::min(rest.getLength(), 32) ), "register(");
+			if (reg.isEmpty() )
+			{
+				continue;
+			}
+			const char* cursor = reg.getTerm() + 1; // skip the class letter (t/u/s/b)
+			uint32_t value = 0;
+			if (!bx::fromString(&value, bx::StringView(cursor, rest.getTerm() ) ) )
+			{
+				continue;
+			}
+			_register = (uint16_t)value;
+			return true;
+		}
+	}
+
+	// Reflection for the Slang-native Metal RT path: loose uniforms carry their
+	// constant-buffer byte offsets (target-independent), and resources carry the
+	// SOURCE register() number as regIndex -- the bgfx stage convention. The Metal
+	// runtime name-matches each record into the emitted MSL (kernel bindings, or
+	// the slang_RTGlobals field list for handler stages) at program creation.
+	static void reflectUniformsFromSource(const SlangDll& _slang, SlangReflection* _reflect, const std::string& _code, UniformArray& _uniforms, bx::WriterI* _messageWriter)
+	{
+		bx::Error messageErr;
+		SlangReflectionTypeLayout* structTl = getGlobalParamsStruct(_slang, _reflect);
+		if (NULL == structTl)
+		{
+			return;
+		}
+
+		const unsigned fieldCount = _slang.TypeLayout_GetFieldCount(structTl);
+		for (unsigned ii = 0; ii < fieldCount; ++ii)
+		{
+			SlangReflectionVariableLayout* field = _slang.TypeLayout_GetFieldByIndex(structTl, ii);
+			SlangTypeKind fieldKind = _slang.TypeLayout_getKind(_slang.VariableLayout_GetTypeLayout(field) );
+			if (SLANG_TYPE_KIND_SAMPLER_STATE == fieldKind)
+			{
+				continue;
+			}
+
+			Uniform un;
+			SlangReflectionVariable* var = _slang.VariableLayout_GetVariable(field);
+			const char* name = _slang.Variable_GetName(var);
+			if (NULL == name)
+			{
+				continue;
+			}
+			un.name = name;
+
+			if (SLANG_TYPE_KIND_RESOURCE == fieldKind)
+			{
+				uint16_t reg = 0;
+				if (!findSourceRegister(_code, name, reg) )
+				{
+					bx::write(_messageWriter, &messageErr
+						, "Error: RT resource '%s' needs an explicit register() -- the register number is the bgfx stage.\n"
+						, name);
+					continue;
+				}
+				if (toSamplerUniform(_slang, field, un, NULL, name)
+				||  toStorageUniform(_slang, field, un, NULL, name)
+				||  toAccelStructUniform(_slang, field, un) )
+				{
+					un.regIndex = reg;
+					_uniforms.push_back(un);
+				}
+				else
+				{
+					warnUnsupportedGlobal(_messageWriter, _slang, field, name);
+				}
+			}
+			else
+			{
+				if (toUniform(_slang, field, un) )
+				{
+					_uniforms.push_back(un);
 				}
 			}
 		}
@@ -1579,7 +1701,11 @@ namespace bgfx
 		// fragment stage, which uses the fragment slot (matching the SPIR-V backend).
 		const int32_t uboBinding = ('f' == _options.shaderType) ? kSpirvFragmentBinding : kSpirvVertexBinding;
 
-		Slang::ComPtr<slang::ISession> session = createSlangSession(global, _targetLang, _version, uboBinding, _messageWriter);
+		// Ray-tracing pipeline stages on Metal use Slang's native Metal backend.
+		const bool nativeMetalRT = ShadingLang::Metal == _targetLang
+			&& NULL != bx::strFind("riahml", _options.shaderType).getPtr();
+
+		Slang::ComPtr<slang::ISession> session = createSlangSession(global, _targetLang, nativeMetalRT, _version, uboBinding, _messageWriter);
 		if (!session)
 		{
 			return false;
@@ -1628,7 +1754,14 @@ namespace bgfx
 		}
 
 		UniformArray uniforms;
-		reflectUniforms(slang, layout, spirvBlob, uboBinding, ShadingLang::Dxil == _targetLang, uniforms, _messageWriter);
+		if (nativeMetalRT)
+		{
+			reflectUniformsFromSource(slang, layout, _code, uniforms, _messageWriter);
+		}
+		else
+		{
+			reflectUniforms(slang, layout, spirvBlob, uboBinding, ShadingLang::Dxil == _targetLang, uniforms, _messageWriter);
+		}
 
 		std::vector<uint16_t> attrIds;
 		if ('v' == _options.shaderType)
@@ -1639,6 +1772,26 @@ namespace bgfx
 		uint32_t inputHash  = 0;
 		uint32_t outputHash = 0;
 		computeVaryingHashes(slang, epReflect, _options.shaderType, inputHash, outputHash);
+
+		if (nativeMetalRT)
+		{
+			// Metal envelope with Slang's native MSL: uniform table (Metal
+			// constant-buffer size convention), code, no vertex attributes.
+			writeEnvelopeHeader(_shaderWriter, _options.shaderType, inputHash, outputHash);
+
+			const uint16_t cbufSize = writeUniformArrayMetal(_shaderWriter, uniforms, false);
+
+			bx::ErrorAssert werr;
+			const uint32_t shaderSize = (uint32_t)spirvBlob->getBufferSize();
+			bx::write(_shaderWriter, shaderSize, &werr);
+			bx::write(_shaderWriter, (const char*)spirvBlob->getBufferPointer(), shaderSize, &werr);
+			const uint8_t nul = 0;
+			bx::write(_shaderWriter, nul, &werr);
+			const uint8_t numAttr = 0;
+			bx::write(_shaderWriter, numAttr, &werr);
+			bx::write(_shaderWriter, cbufSize, &werr);
+			return true;
+		}
 
 		if (ShadingLang::Metal == _targetLang)
 		{
