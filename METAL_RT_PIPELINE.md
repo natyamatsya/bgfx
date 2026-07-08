@@ -1,8 +1,18 @@
 # bgfx × Metal — Ray-Tracing Pipeline Feasibility (spike)
 
-> Status: **runtime model PROVEN on-device** (Apple M2 Max, 2026-07);
-> **blocked on codegen** (Slang's Metal target does not yet lower ray-tracing stages).
-> Companion to `RT_ROADMAP.md`. Prototype: `tools/rt-validation/metal_rt_pipeline_spike.cpp`.
+> Status: **SHIPPED end-to-end** (2026-07): the codegen this document asked for was
+> implemented in the Slang fork -- branch **`metal-rt-impl`** of
+> `github.com/natyamatsya/slang` (spec in `docs/design/metal-raytracing.md` on
+> `metal-rt-spec`; implementation P0..P4, commits `55cc3316..d4d30cb0`) -- and bgfx's
+> shaderc + Metal backend now run the 52-cornellbox RT-pipeline stage on Metal.
+> Building the Metal RT shaders requires that compiler: point shaderc's dynamic
+> libslang at the fork's build (`DYLD_LIBRARY_PATH=<slang>/build/Release/lib`).
+> The staged on-device proofs live in `tools/rt-validation/metal_rt_pipeline_p{0,1,3,4}.cpp`;
+> the original hand-written-MSL spike below is kept as the design rationale.
+>
+> Original spike status: runtime model proven on-device (Apple M2 Max, 2026-07);
+> at that time blocked on codegen. Companion to `RT_ROADMAP.md`.
+> Prototype: `tools/rt-validation/metal_rt_pipeline_spike.cpp`.
 
 ## 1. Question
 
