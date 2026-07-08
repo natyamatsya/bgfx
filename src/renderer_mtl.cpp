@@ -1464,6 +1464,34 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			program.m_numRtMiss = uint8_t(_numMiss);
 			program.m_numRtHit  = uint8_t(_numHitGroups);
 
+			// Runtime contract R1: verify the cross-module ABI descriptor fields
+			// agree across every stage module of this program. A mismatch means the
+			// build compiled stages with differing -metal-rt-* flag sets -- fail
+			// loudly at creation instead of corrupting GPU state.
+			{
+				const ShaderMtl::RTAbi& ref = rayGen.m_rtAbi;
+				for (uint16_t ii = 0; ref.m_valid && ii < uint16_t(_numMiss + _numHitGroups); ++ii)
+				{
+					const ShaderHandle handle = ii < _numMiss ? _miss[ii] : _closestHit[ii - _numMiss];
+					const ShaderMtl::RTAbi& abi = m_shaders[handle.idx].m_rtAbi;
+					if (!abi.m_valid)
+					{
+						continue; // pre-contract module; nothing to verify against
+					}
+					BGFX_FATAL(true
+						&& ref.m_payload == abi.m_payload
+						&& ref.m_attr    == abi.m_attr
+						&& ref.m_ws      == abi.m_ws
+						&& ref.m_isect   == abi.m_isect
+						&& ref.m_slots   == abi.m_slots
+						, Fatal::UnableToInitialize
+						, "Ray-tracing ABI mismatch between stage modules: raygen shader %d {payload %d, attr %d, ws %d, isect %d, slots %d} vs stage shader %d {payload %d, attr %d, ws %d, isect %d, slots %d}. Compile every stage of one program with the same -metal-rt-* flag set."
+						, _rayGen.idx, ref.m_payload, ref.m_attr, ref.m_ws, ref.m_isect, ref.m_slots
+						, handle.idx, abi.m_payload, abi.m_attr, abi.m_ws, abi.m_isect, abi.m_slots
+						);
+				}
+			}
+
 			// Linked stage functions.
 			const NS::Object* fns[8];
 			uint16_t numFns = 0;
@@ -1507,6 +1535,20 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			program.m_computePS = pso;
 			NS::Array* args = m_usesMTLBindings ? reflection->bindings() : reflection->arguments();
 			processArguments(pso, args, NULL, true /*slangRT*/);
+
+			// The descriptor's uniforms.buf is authoritative for the implicit
+			// constant buffer's slot (runtime contract R1); the reflection
+			// name-heuristic in processArguments remains only for pre-contract
+			// modules, and must agree when both exist.
+			if (rayGen.m_rtAbi.m_valid && rayGen.m_rtAbi.m_uniformsBuf >= 0)
+			{
+				BX_ASSERT(pso->m_uniformBufferIndex == rayGen.m_rtAbi.m_uniformsBuf
+					, "RT ABI descriptor uniforms.buf (%d) disagrees with pipeline reflection (%d)."
+					, rayGen.m_rtAbi.m_uniformsBuf
+					, pso->m_uniformBufferIndex
+					);
+				pso->m_uniformBufferIndex = (uint8_t)rayGen.m_rtAbi.m_uniformsBuf;
+			}
 
 			// Kernel user bindings: join reflection names (suffix-stripped) with the
 			// raygen envelope's resource records (name -> bgfx stage).
@@ -1562,20 +1604,36 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			// is defined by the first handler that hoists anything (v1: all handlers
 			// must agree, which one-module-per-stage compilation guarantees when the
 			// resource-using handler is unique -- the Cornell shape).
+		// Slot-addressed globals (runtime contract R2): header {handlers, isect,
+			// sbt, uniforms} at 0/8/16/40 + N 8-byte slots from 48, positionally
+			// addressed by bgfx stage. Usage-derived mode (slots:0) keeps the
+			// owner-tail layout at the pre-contract 40-byte header.
+			program.m_rtGlobalsSlots =
+				(rayGen.m_rtAbi.m_valid && rayGen.m_rtAbi.m_slots > 0) ? (uint8_t)rayGen.m_rtAbi.m_slots : 0;
+
 			program.m_rtGlobalsOwner = NULL;
-			for (uint16_t ii = 0; ii < numFns; ++ii)
+			uint32_t globalsSize = 0;
+			if (program.m_rtGlobalsSlots > 0)
 			{
-				const ShaderMtl* sh = ii < _numMiss ? program.m_rtMiss[ii] : program.m_rtHit[ii - _numMiss];
-				if (sh->m_rtGlobalsTailCount > 0)
-				{
-					program.m_rtGlobalsOwner = sh;
-					break;
-				}
+				globalsSize = 48 + 8*program.m_rtGlobalsSlots;
 			}
-			const uint32_t tailCount = NULL != program.m_rtGlobalsOwner ? program.m_rtGlobalsOwner->m_rtGlobalsTailCount : 0;
-			program.m_globalsBuf = m_device->newBuffer(40 + 8*tailCount, MTL::ResourceStorageModeShared);
+			else
+			{
+				for (uint16_t ii = 0; ii < numFns; ++ii)
+				{
+					const ShaderMtl* sh = ii < _numMiss ? program.m_rtMiss[ii] : program.m_rtHit[ii - _numMiss];
+					if (sh->m_rtGlobalsTailCount > 0)
+					{
+						program.m_rtGlobalsOwner = sh;
+						break;
+					}
+				}
+				const uint32_t tailCount = NULL != program.m_rtGlobalsOwner ? program.m_rtGlobalsOwner->m_rtGlobalsTailCount : 0;
+				globalsSize = 40 + 8*tailCount;
+			}
+			program.m_globalsBuf = m_device->newBuffer(globalsSize, MTL::ResourceStorageModeShared);
 			uint8_t* g = (uint8_t*)program.m_globalsBuf->contents();
-			bx::memSet(g, 0, 40 + 8*tailCount);
+			bx::memSet(g, 0, globalsSize);
 			const uint64_t vftId = program.m_vft->gpuResourceID()._impl;
 			bx::memCopy(g + 0, &vftId, 8);
 			bx::memCopy(g + 16, sbt, 24);
@@ -3664,7 +3722,42 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		// slang_RTGlobals argument buffer (dispatch header + hoisted handler
 		// resources), set the fixed system bindings, and trace -- the dispatch
 		// dimensions are rays.
-		void submitRayTracingDispatch(ProgramMtl& _program, const RenderCompute& _compute, const RenderBind& _renderBind)
+		// Encode one 8-byte globals slot from an application binding: buffers as
+		// device addresses, acceleration structures and textures as resource IDs,
+		// making everything reachable through the argument buffer resident.
+		uint64_t encodeRtGlobalsSlot(const Binding& _bind)
+		{
+			if (kInvalidHandle == _bind.m_idx)
+			{
+				return 0;
+			}
+			switch (_bind.m_type)
+			{
+			case Binding::IndexBuffer:
+			case Binding::VertexBuffer:
+				{
+					const BufferMtl& buffer = Binding::IndexBuffer == _bind.m_type
+						? m_indexBuffers[_bind.m_idx]
+						: m_vertexBuffers[_bind.m_idx]
+						;
+					m_computeCommandEncoder->useResource(buffer.m_ptr, MTL::ResourceUsageRead);
+					return buffer.m_ptr->gpuAddress();
+				}
+			case Binding::AccelerationStructure:
+				{
+					const AccelerationStructureMtl& as = m_accelerationStructures[_bind.m_idx];
+					useAccelerationStructureResources(as);
+					return as.m_accelerationStructure->gpuResourceID()._impl;
+				}
+			case Binding::Image:
+				m_computeCommandEncoder->useResource(m_textures[_bind.m_idx].m_ptr, MTL::ResourceUsageRead);
+				return m_textures[_bind.m_idx].getTextureImage(_bind.m_firstMip, _bind.m_firstLayer, _bind.m_numLayers)->gpuResourceID()._impl;
+			default:
+				return 0;
+			}
+		}
+
+		void submitRayTracingDispatch(ProgramMtl& _program, const RenderCompute& _compute, const RenderBind& _renderBind, uint64_t _uniformsGpuAddr)
 		{
 			for (uint8_t ii = 0; ii < _program.m_numRtKernelArgs; ++ii)
 			{
@@ -3701,9 +3794,20 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				}
 			}
 
-			// Hoisted handler resources into the globals tail (8 bytes per slot:
-			// device address for buffers, gpuResourceID for everything else).
-			if (NULL != _program.m_rtGlobalsOwner)
+			if (_program.m_rtGlobalsSlots > 0)
+			{
+				// Slot-addressed globals (runtime contract R2): header uniforms entry
+				// at byte 40, then slot k <- the application binding at stage k.
+				uint8_t* globals = (uint8_t*)_program.m_globalsBuf->contents();
+				bx::memCopy(globals + 40, &_uniformsGpuAddr, 8);
+				for (uint8_t k = 0; k < _program.m_rtGlobalsSlots; ++k)
+				{
+					const uint64_t value = encodeRtGlobalsSlot(_renderBind.m_bind[k]);
+					bx::memCopy(globals + 48 + 8*k, &value, 8);
+				}
+			}
+			// Usage-derived tail (slots:0, pre-contract layout).
+			else if (NULL != _program.m_rtGlobalsOwner)
 			{
 				uint8_t* globals = (uint8_t*)_program.m_globalsBuf->contents();
 				const ShaderMtl* owner = _program.m_rtGlobalsOwner;
@@ -4227,6 +4331,51 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		bx::write(_writer, _str, (int32_t)bx::strLen(_str), bx::ErrorAssert{});
 	}
 
+	// Extract one integer field from the single-line ABI descriptor. Fields are
+	// in fixed order per the contract, so a simple key scan suffices.
+	static bool rtAbiInt(const bx::StringView& _line, const char* _key, int32_t& _value)
+	{
+		const bx::StringView key = bx::strFind(_line, _key);
+		if (key.isEmpty() )
+		{
+			return false;
+		}
+		uint32_t parsed = 0;
+		if (!bx::fromString(&parsed, bx::StringView(key.getTerm(), _line.getTerm() ) ) )
+		{
+			return false;
+		}
+		_value = (int32_t)parsed;
+		return true;
+	}
+
+	// Parse the `slang-metal-rt-abi:` descriptor line (runtime contract section 2)
+	// from an RT-stage module's MSL. Modules from pre-contract compilers have no
+	// line; m_valid stays false and verification skips them.
+	static void parseRtAbiDescriptor(ShaderMtl::RTAbi& _abi, const char* _code, uint32_t _size)
+	{
+		const bx::StringView codeView(_code, (int32_t)_size);
+		const bx::StringView tag = bx::strFind(codeView, "// slang-metal-rt-abi:");
+		if (tag.isEmpty() )
+		{
+			return;
+		}
+		const bx::StringView eol = bx::strFind(bx::StringView(tag.getTerm(), codeView.getTerm() ), "\n");
+		const bx::StringView line(tag.getTerm(), eol.isEmpty() ? codeView.getTerm() : eol.getPtr() );
+
+		_abi.m_valid = true
+			&& rtAbiInt(line, "\"payload\":", _abi.m_payload)
+			&& rtAbiInt(line, "\"attr\":",    _abi.m_attr)
+			&& rtAbiInt(line, "\"ws\":",      _abi.m_ws)
+			&& rtAbiInt(line, "\"isect\":",   _abi.m_isect)
+			&& rtAbiInt(line, "\"slots\":",   _abi.m_slots)
+			;
+		// Optional trailing objects; "buf" only appears inside "uniforms" (the
+		// "sys" object has no such key), so a flat scan is unambiguous.
+		rtAbiInt(line, "\"buf\":", _abi.m_uniformsBuf);
+		rtAbiInt(line, "\"size\":", _abi.m_uniformsSize);
+	}
+
 	// Handler stages: the slang_RTGlobals field order after the 3-field dispatch
 	// header IS the argument-buffer layout of the hoisted resources (see
 	// METAL_RT_PIPELINE.md and the metal_rt_pipeline_p3 contract). Recover it by
@@ -4380,6 +4529,7 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 
 	if (m_isRayTracing)
 		{
+			parseRtAbiDescriptor(m_rtAbi, code, shaderSize);
 			parseRtGlobalsTail(*this, code, shaderSize);
 		}
 
@@ -6914,6 +7064,7 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 					}
 
 					const RenderCompute& compute = renderItem.compute;
+					uint64_t uniformsGpuAddr = 0;
 
 					rendererUpdateUniforms(this, _render->m_uniformBuffer[compute.m_uniformIdx], compute.m_uniformBegin, compute.m_uniformEnd);
 
@@ -6950,13 +7101,14 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 							ChunkedScratchBufferOffset sbo;
 							m_uniformScratchBuffer.write(sbo, m_vsScratch, vertexUniformBufferSize);
 							m_computeCommandEncoder->setBuffer(sbo.buffer, sbo.offsets[0], currentPso->m_uniformBufferIndex);
+							uniformsGpuAddr = sbo.buffer->gpuAddress() + sbo.offsets[0];
 						}
 					}
 
 					ProgramMtl& csProgram = m_program[currentProgram.idx];
 					if (csProgram.isRayTracing() )
 					{
-						submitRayTracingDispatch(csProgram, compute, renderBind);
+						submitRayTracingDispatch(csProgram, compute, renderBind, uniformsGpuAddr);
 						continue;
 					}
 

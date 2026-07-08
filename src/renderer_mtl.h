@@ -366,6 +366,22 @@ namespace bgfx { namespace mtl
 			uint16_t m_stage;
 			uint16_t m_descriptorId; // descriptorTypeToId(...) from the envelope regCount
 		};
+	// The ray-tracing ABI descriptor of the runtime contract (the
+		// `slang-metal-rt-abi:` line the Slang backend emits into every RT-stage
+		// module). Cross-module fields are verified at program creation.
+		struct RTAbi
+		{
+			int32_t m_payload = -1;
+			int32_t m_attr = -1;
+			int32_t m_ws = -1;
+			int32_t m_isect = -1;
+			int32_t m_slots = -1;
+			int32_t m_uniformsBuf = -1;  // raygen modules with loose uniforms
+			int32_t m_uniformsSize = 0;  // any module with loose uniforms
+			bool    m_valid = false;
+		};
+		RTAbi m_rtAbi;
+
 		RTResource m_rtResources[8];
 		uint8_t m_numRTResources = 0;
 		uint8_t m_rtGlobalsTail[8]; // indices into m_rtResources, in slang_RTGlobals field order
@@ -409,6 +425,7 @@ namespace bgfx { namespace mtl
 		MTL::Buffer* m_instOffsets = NULL;
 		MTL::Buffer* m_globalsBuf = NULL;
 		const ShaderMtl* m_rtGlobalsOwner = NULL; // handler whose tail defines the globals layout
+		uint8_t m_rtGlobalsSlots = 0;             // descriptor slots:N (0 = usage-derived tail)
 
 		struct RTKernelArg
 		{

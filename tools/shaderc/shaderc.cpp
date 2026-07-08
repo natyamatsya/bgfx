@@ -1028,6 +1028,8 @@ namespace bgfx
 		{ '\0', "lang",                    1, "<lang>",         "Source language: 'bgfx' (default) or 'slang'. Inferred from a .slang extension." },
 		{ '\0', "slang-no-predefined",     0, NULL,             "Slang: do not auto-declare bgfx predefined uniforms (u_modelViewProj, etc.);\n"
 		                                                        "declare them in the shader."                                                     },
+		{ '\0', "metal-rt-globals-slots", 1, "<count>",        "Slang/Metal ray tracing: number of slots reserved in the slang_RTGlobals\n"
+		                                                        "argument buffer. Default 0."                                                     },
 		{ '\0', "varyingdef",              1, "<file path>",    "varying.def.sc's file path."                                                     },
 		{ '\0', "verbose",                 0, NULL,             "Be verbose."                                                                     },
 		{ '\0', "debug",                   0, NULL,             "Debug information. (Vulkan, DirectX and Metal only)"                             },
@@ -2561,6 +2563,9 @@ namespace bgfx
 		}
 
 		options.disasm = cmdLine.hasArg('\0', "disasm");
+
+		options.metalRtGlobalsSlots = 0;
+		cmdLine.hasArg(options.metalRtGlobalsSlots, '\0', "metal-rt-globals-slots");
 
 		const char* platform = cmdLine.findOption('\0', "platform");
 		if (NULL == platform)
