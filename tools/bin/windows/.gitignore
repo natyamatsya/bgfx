@@ -1,1 +1,7 @@
 *
+
+# Vendored Slang compiler library (loaded dynamically by shaderc; see 3rdparty/slang).
+# Must match the SLANG_VERSION_NUMERIC of the vendored headers. On Windows the SPIR-V/DXIL
+# paths do not need the fork's Metal-native patches, so a stock Slang release dll suffices;
+# the fork's own Windows build is the long-term source. (RT_WINDOWS_ROADMAP.md M0.)
+!slang.dll
