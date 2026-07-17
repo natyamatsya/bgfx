@@ -609,4 +609,5 @@ if _OPTIONS["with-tools"] then
 	dofile "texturev.lua"
 	dofile "geometryc.lua"
 	dofile "geometryv.lua"
+	dofile "rt-validation.lua" -- headless ray-tracing runtime tests (RT_WINDOWS_ROADMAP.md M0)
 end

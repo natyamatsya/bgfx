@@ -49,6 +49,24 @@ jobs:
           ".build\${{ matrix.bindir }}\bin\geometryc${{ matrix.config }}.exe" --version
           ".build\${{ matrix.bindir }}\bin\shaderc${{ matrix.config }}.exe" --version
           ".build\${{ matrix.bindir }}\bin\texturec${{ matrix.config }}.exe" --version
+      # M0 (RT_WINDOWS_ROADMAP.md): exercise the Slang front-end on Windows. shaderc
+      # dlopens slang.dll from beside its own executable (the Windows analog of the osx
+      # job's libslang.dylib copy), so vendor it there, then run the SPIR-V compliance
+      # subset. TODO(M0): pin the Slang version to the vendored headers'
+      # SLANG_VERSION_NUMERIC and, long-term, use the fork's own Windows slang.dll build.
+      - name: Slang compliance (SPIR-V)
+        if: matrix.config == 'Release'
+        shell: pwsh
+        run: |
+          cd bgfx
+          $ver = "2026.12.2"
+          $url = "https://github.com/shader-slang/slang/releases/download/v$ver/slang-$ver-windows-x86_64.zip"
+          Invoke-WebRequest -Uri $url -OutFile slang.zip
+          Expand-Archive slang.zip -DestinationPath slang-dist -Force
+          Copy-Item slang-dist/bin/slang.dll ".build/${{ matrix.bindir }}/bin/slang.dll"
+          python tools/shaderc/slang-compliance/run.py `
+            --shaderc ".build/${{ matrix.bindir }}/bin/shaderc${{ matrix.config }}.exe" `
+            --target spirv
   mingw:
     strategy:
       fail-fast: true
