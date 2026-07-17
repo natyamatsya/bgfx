@@ -560,6 +560,28 @@ public:
 		{
 			m_resetAccum = true;
 		}
+		ImGui::Separator();
+		if (ImGui::CollapsingHeader("Diagnostics") )
+		{
+			const bgfx::Caps* dcaps = bgfx::getCaps();
+			ImGui::Text("Renderer: %s", bgfx::getRendererName(bgfx::getRendererType() ) );
+			ImGui::Text("Caps  compute:%d rayTracing:%d rtPipeline:%d"
+				, 0 != (dcaps->supported & BGFX_CAPS_COMPUTE)
+				, 0 != (dcaps->supported & BGFX_CAPS_RAY_TRACING)
+				, 0 != (dcaps->supported & BGFX_CAPS_RAY_TRACING_PIPELINE)
+				);
+			ImGui::Text("Path: %s  stage:%d  frame:%d (advancing => compute dispatches)"
+				, m_rtSupported ? "ray-query" : "compute fallback", m_stage, int(m_frameIdx)
+				);
+			ImGui::Text("Programs  cs:%d atrous:%d temporal:%d display:%d"
+				, bgfx::isValid(m_csProgram), bgfx::isValid(m_atrousProgram)
+				, bgfx::isValid(m_temporalProgram), bgfx::isValid(m_displayProgram)
+				);
+			ImGui::Text("Textures  out:%d accum:%d gbufN:%d irr0:%d res0:%d"
+				, bgfx::isValid(m_outputTex), bgfx::isValid(m_accumTex)
+				, bgfx::isValid(m_gbufN), bgfx::isValid(m_irr[0]), bgfx::isValid(m_reservoir[0])
+				);
+		}
 		ImGui::End();
 
 		imguiEndFrame();
