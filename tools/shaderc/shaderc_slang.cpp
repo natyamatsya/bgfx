@@ -1682,15 +1682,10 @@ namespace bgfx
 			return false;
 		}
 
-		// DXIL scope (RT_WINDOWS_ROADMAP.md M1): compute and the six ray-tracing
-		// stages. Graphics stages need the attribute/varying conventions of the D3D12
-		// backend and arrive with that work.
-		if (ShadingLang::Dxil == _targetLang
-		&&  ('v' == _options.shaderType || 'f' == _options.shaderType) )
-		{
-			bx::write(_messageWriter, &messageErr, "Error: the DXIL target currently supports compute and ray-tracing shaders only.\n");
-			return false;
-		}
+		// DXIL scope: compute, the six ray-tracing stages (M1/M3), and graphics vertex/
+		// fragment stages (M4 -- e.g. the 52-cornellbox display pass on D3D12). Slang emits
+		// SM 6.x DXIL for v/f directly; the register()-pass-through convention and the vertex
+		// attribute table are the same as the SPIR-V path.
 
 		SlangDll slang = load(_messageWriter);
 		if (NULL == slang.dll.ptr)
