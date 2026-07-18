@@ -269,6 +269,56 @@ namespace bgfx { namespace d3d12
 		VertexLayoutHandle m_layoutHandle;
 	};
 
+	// DXR acceleration structure (BLAS or TLAS). Mirrors AccelerationStructureVK; the
+	// SBT/pipeline members it lacks arrive with M3 (RT_WINDOWS_ROADMAP.md).
+	struct AccelerationStructureD3D12
+	{
+		AccelerationStructureD3D12()
+			: m_numGeometries(0)
+			, m_buffer(NULL)
+			, m_scratchBuffer(NULL)
+			, m_instanceBuffer(NULL)
+			, m_deviceAddress(0)
+			, m_numInstances(0)
+		{
+		}
+
+		// One BLAS geometry, cached so updateBlas can refit in place after the source
+		// vertex data changes on the GPU. The source buffer handles are kept so the build
+		// can transition them to the DXR-required input state (they may have been left in
+		// UNORDERED_ACCESS by the compute shader that deformed them).
+		struct Geometry
+		{
+			D3D12_GPU_VIRTUAL_ADDRESS m_vertexAddress; // AABB buffer when m_isAabbs
+			D3D12_GPU_VIRTUAL_ADDRESS m_indexAddress;
+			uint32_t    m_vertexStride;
+			uint32_t    m_numVertices;
+			uint32_t    m_numTriangles;                // AABB count when m_isAabbs
+			DXGI_FORMAT m_indexFormat;                 // R16_UINT / R32_UINT
+			uint16_t    m_vertexBufferIdx;             // source VB (or AABB buffer) handle
+			uint16_t    m_indexBufferIdx;              // source IB handle; kInvalidHandle for AABBs
+			bool        m_isAabbs;
+		};
+
+		void createBlas(ID3D12GraphicsCommandList4* _commandList, const Geometry* _geometries, uint16_t _num);
+		void updateBlas(ID3D12GraphicsCommandList4* _commandList);
+		void createTlas(ID3D12GraphicsCommandList4* _commandList, const D3D12_GPU_VIRTUAL_ADDRESS* _blasAddresses, uint16_t _num);
+		void updateTlas(ID3D12GraphicsCommandList4* _commandList, const float* _transforms);
+		void destroy();
+
+		void buildBlas(ID3D12GraphicsCommandList4* _commandList, bool _create);
+		void buildTlas(ID3D12GraphicsCommandList4* _commandList, bool _create);
+
+		Geometry m_geometries[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+		uint16_t m_numGeometries;
+
+		ID3D12Resource* m_buffer;         // AS storage (default heap, AS state)
+		ID3D12Resource* m_scratchBuffer;  // build/refit scratch (kept alive for refits)
+		ID3D12Resource* m_instanceBuffer; // TLAS instance descs (upload heap)
+		D3D12_GPU_VIRTUAL_ADDRESS m_deviceAddress; // == m_buffer VA
+		uint16_t m_numInstances;          // TLAS only
+	};
+
 	struct ShaderD3D12
 	{
 		ShaderD3D12()

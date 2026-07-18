@@ -1,11 +1,15 @@
 // Headless end-to-end ray-query test: build a triangle BLAS+TLAS, trace one ray per pixel
 // (all pixels trace the same ray straight down +Z into the triangle), read back the image.
-// Expect white (hit). Proves createBlas/createTlas + setAccelerationStructure + ray query
-// on the Metal backend. Usage: rt_run <rq.bin>
+// Expect white (hit). Proves createBlas/createTlas + setAccelerationStructure + ray query,
+// then exercises updateTlas, a multi-geometry BLAS, and updateBlas refit. Backend-agnostic
+// (keyed off BGFX_CAPS_RAY_TRACING); validated on Metal, Vulkan/lavapipe and D3D12/WARP.
+// Usage: rt_smoke <ray-query.bin> <deform.bin>
 #include <bgfx/bgfx.h>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 
 static const bgfx::Memory* loadBin(const char* path)
@@ -27,6 +31,23 @@ int main(int argc, char** argv)
 	bgfx::renderFrame();
 	bgfx::Init init;
 	init.type = bgfx::RendererType::Count;
+	// Optional Windows/CI overrides (default: auto-select). BGFX_RT_RENDERER forces the
+	// backend ("d3d12", "vulkan", "d3d11"); BGFX_RT_WARP=1 picks the software adapter
+	// (WARP on D3D12) for a deterministic, GPU-free reference run.
+	if (const char* r = getenv("BGFX_RT_RENDERER") )
+	{
+		if      (0 == strcmp(r, "d3d12")  || 0 == strcmp(r, "direct3d12") ) init.type = bgfx::RendererType::Direct3D12;
+		else if (0 == strcmp(r, "vulkan") || 0 == strcmp(r, "vk") )         init.type = bgfx::RendererType::Vulkan;
+		else if (0 == strcmp(r, "d3d11")  || 0 == strcmp(r, "direct3d11") ) init.type = bgfx::RendererType::Direct3D11;
+	}
+	if (NULL != getenv("BGFX_RT_WARP") )
+	{
+		init.vendorId = BGFX_PCI_ID_SOFTWARE_RASTERIZER;
+	}
+	if (NULL != getenv("BGFX_RT_DEBUG") )
+	{
+		init.debug = true;
+	}
 	init.resolution.width = 0; init.resolution.height = 0;
 	if (!bgfx::init(init) ) { printf("bgfx::init failed\n"); return 1; }
 
@@ -164,6 +185,9 @@ int main(int argc, char** argv)
 	bgfx::destroy(tlas); bgfx::destroy(blas);
 	bgfx::destroy(rbTex); bgfx::destroy(outTex);
 	bgfx::destroy(prog); bgfx::destroy(vbh); bgfx::destroy(ibh);
+	// Flush the deferred resource frees before shutdown so no GPU resource outlives the
+	// device (D3D12 releases resources on the frame whose fence has retired).
+	bgfx::frame(); bgfx::frame();
 	bgfx::shutdown();
 	return (pass1 && pass2 && pass3 && pass4) ? 0 : 3;
 }

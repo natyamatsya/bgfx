@@ -682,6 +682,40 @@ namespace bgfx { namespace d3d12
 		return createCommittedResource(_device, _heapProperty, &resourceDesc, NULL, false, _heapFlags);
 	}
 
+	// DXR buffer: a default-heap UAV buffer created directly in an explicit initial state.
+	// Used for AS storage (D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, never
+	// transitioned afterward) and build scratch (D3D12_RESOURCE_STATE_UNORDERED_ACCESS). The
+	// plain createCommittedResource overloads only offer the heap's COMMON state.
+	ID3D12Resource* createRtBuffer(ID3D12Device* _device, uint64_t _size, D3D12_RESOURCE_STATES _initialState)
+	{
+		const HeapProperty& heapProperty = s_heapProperties[HeapProperty::Default];
+
+		D3D12_RESOURCE_DESC resourceDesc = {};
+		resourceDesc.Dimension          = D3D12_RESOURCE_DIMENSION_BUFFER;
+		resourceDesc.Width              = _size;
+		resourceDesc.Height             = 1;
+		resourceDesc.DepthOrArraySize   = 1;
+		resourceDesc.MipLevels          = 1;
+		resourceDesc.Format             = DXGI_FORMAT_UNKNOWN;
+		resourceDesc.SampleDesc.Count   = 1;
+		resourceDesc.SampleDesc.Quality = 0;
+		resourceDesc.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		resourceDesc.Flags              = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+		ID3D12Resource* resource;
+		DX_CHECK(_device->CreateCommittedResource(&heapProperty.m_properties
+			, D3D12_HEAP_FLAG_NONE
+			, &resourceDesc
+			, _initialState
+			, NULL
+			, IID_ID3D12Resource
+			, (void**)&resource
+			) );
+		BX_WARN(NULL != resource, "CreateCommittedResource (acceleration structure) failed (size: %d). Out of memory?", _size);
+
+		return resource;
+	}
+
 	inline bool isLost(HRESULT _hr)
 	{
 		return false
@@ -859,6 +893,8 @@ namespace bgfx { namespace d3d12
 			ErrorState::Enum errorState = ErrorState::Default;
 //			LUID luid;
 
+			m_device5 = NULL;
+
 #if BGFX_CONFIG_DEBUG_ANNOTATION && (BX_PLATFORM_WINDOWS || BX_PLATFORM_WINRT)
 			m_winPixEvent = bx::dlopen("WinPixEventRuntime.dll");
 
@@ -1031,6 +1067,22 @@ namespace bgfx { namespace d3d12
 					}
 				}
 
+#if BGFX_CONFIG_D3D12_EXPERIMENTAL_SHADER_MODELS && (BX_PLATFORM_WINDOWS || BX_PLATFORM_WINRT)
+				// DXR unsigned-DXIL (RT_WINDOWS_ROADMAP.md M2): let WARP / dev-mode hardware
+				// load unsigned DXIL by enabling experimental shader models before the device
+				// is created. No-op without Developer Mode; failure is non-fatal (the signed
+				// path still works), so ignore the HRESULT.
+				if (NULL != D3D12EnableExperimentalFeatures)
+				{
+					static const UUID s_experimentalFeatures[] = { D3D12ExperimentalShaderModels };
+					HRESULT hrExp = D3D12EnableExperimentalFeatures(BX_COUNTOF(s_experimentalFeatures), s_experimentalFeatures, NULL, NULL);
+					BX_TRACE("D3D12EnableExperimentalFeatures(ShaderModels): 0x%08x%s"
+						, (uint32_t)hrExp
+						, SUCCEEDED(hrExp) ? " (unsigned DXIL enabled)" : " (unavailable; needs Developer Mode)"
+						);
+				}
+#endif // BGFX_CONFIG_D3D12_EXPERIMENTAL_SHADER_MODELS
+
 				D3D_FEATURE_LEVEL featureLevel[] =
 				{
 					D3D_FEATURE_LEVEL_12_2,
@@ -1200,9 +1252,21 @@ namespace bgfx { namespace d3d12
 				BX_TRACE("\tSRVOnlyTiledResourceTier3 %d", options5.SRVOnlyTiledResourceTier3);
 				BX_TRACE("\tRenderPassesTier %d", options5.RenderPassesTier);
 				BX_TRACE("\tRaytracingTier %d", options5.RaytracingTier);
-				m_rayTracingSupport = options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0;
+				// Inline ray query (RayQuery, SM 6.5) is a Tier 1_1 feature; Tier 1_0 only
+				// supports the RT pipeline (M3). BGFX_CAPS_RAY_TRACING here means inline query.
+				m_rayTracingSupport = options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1;
 				break;
 			}
+
+			// DXR needs ID3D12Device5 (GetRaytracingAccelerationStructurePrebuildInfo) --
+			// available iff the device reached interface version 5 (already probed above).
+			// Cache it for the AS build path; released in shutdown.
+			m_rayTracingSupport = m_rayTracingSupport && m_deviceInterfaceVersion >= 5;
+			if (m_rayTracingSupport)
+			{
+				DX_CHECK(m_device->QueryInterface(IID_ID3D12Device5, (void**)&m_device5) );
+			}
+			BX_TRACE("Ray tracing (inline query) support: %d", m_rayTracingSupport);
 
 			for (D3D12_FEATURE_DATA_D3D12_OPTIONS6 options6; SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6, &options6, sizeof(options6) ) );)
 			{
@@ -2059,6 +2123,7 @@ namespace bgfx { namespace d3d12
 				[[fallthrough]];
 
 			case ErrorState::CreatedDXGIFactory:
+				DX_RELEASE_I(m_device5);
 				DX_RELEASE(m_device,  0);
 #if !BX_PLATFORM_LINUX
 				m_dxgi.shutdown();
@@ -2124,6 +2189,11 @@ namespace bgfx { namespace d3d12
 				m_vertexBuffers[ii].destroy();
 			}
 
+			for (uint32_t ii = 0; ii < BX_COUNTOF(m_accelerationStructures); ++ii)
+			{
+				m_accelerationStructures[ii].destroy();
+			}
+
 			for (uint32_t ii = 0; ii < BX_COUNTOF(m_shaders); ++ii)
 			{
 				m_shaders[ii].destroy();
@@ -2156,6 +2226,7 @@ namespace bgfx { namespace d3d12
 			m_device->SetPrivateDataInterface(IID_ID3D12CommandQueue, NULL);
 			m_cmd.shutdown();
 
+			DX_RELEASE_I(m_device5);
 			DX_RELEASE(m_device, 0);
 
 			m_nvapi.shutdown();
@@ -2263,39 +2334,125 @@ namespace bgfx { namespace d3d12
 			m_vertexBuffers[_handle.idx].create(_mem->size, _mem->data, _layoutHandle, _flags);
 		}
 
+		// The DXR command-list interface. The active command list is swapped per frame, so
+		// query it per build call rather than caching. Availability is implied by the RT
+		// cap (a DXR-capable device's command lists support ID3D12GraphicsCommandList4).
+		// Caller releases the returned pointer.
+		ID3D12GraphicsCommandList4* getCommandListRt()
+		{
+			ID3D12GraphicsCommandList4* commandList = NULL;
+			DX_CHECK(m_commandList->QueryInterface(IID_ID3D12GraphicsCommandList4, (void**)&commandList) );
+			return commandList;
+		}
+
 		void createBlas(AccelerationStructureHandle _handle, const VertexBufferHandle* _vertexBuffers, const IndexBufferHandle* _indexBuffers, uint16_t _num) override
 		{
-			BX_UNUSED(_handle, _vertexBuffers, _indexBuffers, _num);
+			AccelerationStructureD3D12::Geometry geometries[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+			for (uint16_t ii = 0; ii < _num; ++ii)
+			{
+				VertexBufferD3D12& vb = m_vertexBuffers[_vertexBuffers[ii].idx];
+				BufferD3D12&       ib = m_indexBuffers[_indexBuffers[ii].idx];
+
+				const uint32_t stride = m_vertexLayouts[vb.m_layoutHandle.idx].m_stride;
+				const bool index32 = 0 != (ib.m_flags & BGFX_BUFFER_INDEX32);
+
+				// DXR reads build inputs as NON_PIXEL_SHADER_RESOURCE.
+				vb.setState(m_commandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+				ib.setState(m_commandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+				AccelerationStructureD3D12::Geometry& geometry = geometries[ii];
+				geometry.m_vertexAddress   = vb.m_gpuVA;
+				geometry.m_indexAddress    = ib.m_gpuVA;
+				geometry.m_vertexStride    = stride;
+				geometry.m_numVertices     = stride > 0 ? vb.m_size / stride : 0;
+				geometry.m_numTriangles    = (ib.m_size / (index32 ? 4 : 2) ) / 3;
+				geometry.m_isAabbs         = false;
+				geometry.m_indexFormat     = index32 ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT;
+				geometry.m_vertexBufferIdx = _vertexBuffers[ii].idx;
+				geometry.m_indexBufferIdx  = _indexBuffers[ii].idx;
+			}
+
+			ID3D12GraphicsCommandList4* commandList = getCommandListRt();
+			m_accelerationStructures[_handle.idx].createBlas(commandList, geometries, _num);
+			commandList->Release();
 		}
 
 		void createBlasAabbs(AccelerationStructureHandle _handle, const VertexBufferHandle* _aabbBuffers, uint16_t _num) override
 		{
-			BX_UNUSED(_handle, _aabbBuffers, _num);
+			AccelerationStructureD3D12::Geometry geometries[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+			for (uint16_t ii = 0; ii < _num; ++ii)
+			{
+				VertexBufferD3D12& vb = m_vertexBuffers[_aabbBuffers[ii].idx];
+
+				// DXR reads build inputs as NON_PIXEL_SHADER_RESOURCE.
+				vb.setState(m_commandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+				AccelerationStructureD3D12::Geometry& geometry = geometries[ii];
+				geometry.m_isAabbs         = true;
+				geometry.m_vertexAddress   = vb.m_gpuVA;
+				geometry.m_indexAddress    = 0;
+				geometry.m_vertexStride    = sizeof(D3D12_RAYTRACING_AABB);
+				geometry.m_numVertices     = 0;
+				geometry.m_numTriangles    = vb.m_size / sizeof(D3D12_RAYTRACING_AABB); // AABB count
+				geometry.m_indexFormat     = DXGI_FORMAT_UNKNOWN;
+				geometry.m_vertexBufferIdx = _aabbBuffers[ii].idx;
+				geometry.m_indexBufferIdx  = kInvalidHandle;
+			}
+
+			ID3D12GraphicsCommandList4* commandList = getCommandListRt();
+			m_accelerationStructures[_handle.idx].createBlas(commandList, geometries, _num);
+			commandList->Release();
 		}
 
 		void updateBlas(AccelerationStructureHandle _handle) override
 		{
-			BX_UNUSED(_handle);
+			// Re-establish the DXR input state: the source buffers were left in
+			// UNORDERED_ACCESS by the compute pass that deformed them before this refit.
+			AccelerationStructureD3D12& as = m_accelerationStructures[_handle.idx];
+			for (uint16_t ii = 0; ii < as.m_numGeometries; ++ii)
+			{
+				const AccelerationStructureD3D12::Geometry& geometry = as.m_geometries[ii];
+				m_vertexBuffers[geometry.m_vertexBufferIdx].setState(m_commandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+				if (kInvalidHandle != geometry.m_indexBufferIdx)
+				{
+					m_indexBuffers[geometry.m_indexBufferIdx].setState(m_commandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+				}
+			}
+
+			ID3D12GraphicsCommandList4* commandList = getCommandListRt();
+			as.updateBlas(commandList);
+			commandList->Release();
 		}
 
 		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, const ShaderHandle* _intersection, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) override
 		{
+			// M3 (RT_WINDOWS_ROADMAP.md): D3D12 ray-tracing pipeline (state objects + SBT).
 			BX_UNUSED(_handle, _rayGen, _miss, _numMiss, _closestHit, _anyHit, _intersection, _numHitGroups, _callable, _numCallables);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
 		{
-			BX_UNUSED(_handle, _blases, _num);
+			D3D12_GPU_VIRTUAL_ADDRESS blasAddresses[BGFX_CONFIG_MAX_TLAS_INSTANCES];
+			for (uint16_t ii = 0; ii < _num; ++ii)
+			{
+				blasAddresses[ii] = m_accelerationStructures[_blases[ii].idx].m_deviceAddress;
+			}
+
+			ID3D12GraphicsCommandList4* commandList = getCommandListRt();
+			m_accelerationStructures[_handle.idx].createTlas(commandList, blasAddresses, _num);
+			commandList->Release();
 		}
 
 		void updateTlas(AccelerationStructureHandle _handle, const Memory* _mem) override
 		{
-			BX_UNUSED(_handle, _mem);
+			ID3D12GraphicsCommandList4* commandList = getCommandListRt();
+			m_accelerationStructures[_handle.idx].updateTlas(commandList, (const float*)_mem->data);
+			commandList->Release();
 		}
 
 		void destroyAccelerationStructure(AccelerationStructureHandle _handle) override
 		{
-			BX_UNUSED(_handle);
+			m_accelerationStructures[_handle.idx].destroy();
 		}
 
 		void destroyVertexBuffer(VertexBufferHandle _handle) override
@@ -4344,6 +4501,7 @@ namespace bgfx { namespace d3d12
 		FrameBufferHandle m_windows[BGFX_CONFIG_MAX_FRAME_BUFFERS];
 
 		ID3D12Device*       m_device;
+		ID3D12Device5*      m_device5; // DXR device, cached when ray tracing is supported
 		TimerQueryD3D12     m_gpuTimer;
 		OcclusionQueryD3D12 m_occlusionQuery;
 
@@ -4382,6 +4540,7 @@ namespace bgfx { namespace d3d12
 
 		BufferD3D12 m_indexBuffers[BGFX_CONFIG_MAX_INDEX_BUFFERS];
 		VertexBufferD3D12 m_vertexBuffers[BGFX_CONFIG_MAX_VERTEX_BUFFERS];
+		AccelerationStructureD3D12 m_accelerationStructures[BGFX_CONFIG_MAX_ACCELERATION_STRUCTURES];
 		ShaderD3D12 m_shaders[BGFX_CONFIG_MAX_SHADERS];
 		ProgramD3D12 m_program[BGFX_CONFIG_MAX_PROGRAMS];
 		TextureD3D12 m_textures[BGFX_CONFIG_MAX_TEXTURES];
@@ -5983,6 +6142,199 @@ namespace bgfx { namespace d3d12
 	{
 		BufferD3D12::create(_size, _data, _flags, true);
 		m_layoutHandle = _layoutHandle;
+	}
+
+	void AccelerationStructureD3D12::createBlas(ID3D12GraphicsCommandList4* _commandList, const Geometry* _geometries, uint16_t _num)
+	{
+		m_numGeometries = _num;
+		for (uint16_t ii = 0; ii < _num; ++ii)
+		{
+			m_geometries[ii] = _geometries[ii];
+		}
+
+		buildBlas(_commandList, true);
+	}
+
+	void AccelerationStructureD3D12::updateBlas(ID3D12GraphicsCommandList4* _commandList)
+	{
+		buildBlas(_commandList, false);
+	}
+
+	void AccelerationStructureD3D12::buildBlas(ID3D12GraphicsCommandList4* _commandList, bool _create)
+	{
+		// One opaque geometry per entry. Triangle position is assumed to be at vertex
+		// offset 0 in R32G32B32_FLOAT form (the common bgfx layout).
+		D3D12_RAYTRACING_GEOMETRY_DESC geometries[BGFX_CONFIG_MAX_BLAS_GEOMETRIES];
+		for (uint16_t ii = 0; ii < m_numGeometries; ++ii)
+		{
+			const Geometry& src = m_geometries[ii];
+
+			D3D12_RAYTRACING_GEOMETRY_DESC& geometry = geometries[ii];
+			geometry.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+
+			if (src.m_isAabbs)
+			{
+				geometry.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_PROCEDURAL_PRIMITIVE_AABBS;
+				geometry.AABBs.AABBCount            = src.m_numTriangles; // AABB count
+				geometry.AABBs.AABBs.StartAddress   = src.m_vertexAddress;
+				geometry.AABBs.AABBs.StrideInBytes  = sizeof(D3D12_RAYTRACING_AABB);
+			}
+			else
+			{
+				geometry.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+				geometry.Triangles.Transform3x4                = 0;
+				geometry.Triangles.IndexFormat                 = src.m_indexFormat;
+				geometry.Triangles.VertexFormat                = DXGI_FORMAT_R32G32B32_FLOAT;
+				geometry.Triangles.IndexCount                  = src.m_numTriangles * 3;
+				geometry.Triangles.VertexCount                 = src.m_numVertices;
+				geometry.Triangles.IndexBuffer                 = src.m_indexAddress;
+				geometry.Triangles.VertexBuffer.StartAddress   = src.m_vertexAddress;
+				geometry.Triangles.VertexBuffer.StrideInBytes  = src.m_vertexStride;
+			}
+		}
+
+		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
+		inputs.Type           = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+		inputs.DescsLayout    = D3D12_ELEMENTS_LAYOUT_ARRAY;
+		inputs.Flags          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
+			| D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+		inputs.NumDescs       = m_numGeometries;
+		inputs.pGeometryDescs = geometries;
+
+		if (_create)
+		{
+			D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuild = {};
+			s_renderD3D12->m_device5->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuild);
+
+			// One scratch buffer serves both the initial build and later refits.
+			const uint64_t scratchSize = bx::max(prebuild.ScratchDataSizeInBytes, prebuild.UpdateScratchDataSizeInBytes);
+
+			m_buffer        = createRtBuffer(s_renderD3D12->m_device, prebuild.ResultDataMaxSizeInBytes, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+			m_scratchBuffer = createRtBuffer(s_renderD3D12->m_device, scratchSize, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+			m_deviceAddress = m_buffer->GetGPUVirtualAddress();
+		}
+
+		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC desc = {};
+		desc.Inputs                            = inputs;
+		desc.DestAccelerationStructureData     = m_deviceAddress;
+		desc.ScratchAccelerationStructureData  = m_scratchBuffer->GetGPUVirtualAddress();
+		if (!_create)
+		{
+			desc.Inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+			desc.SourceAccelerationStructureData = m_deviceAddress; // in-place refit
+		}
+
+		_commandList->BuildRaytracingAccelerationStructure(&desc, 0, NULL);
+
+		// Serialize the build against a subsequent TLAS build reading this BLAS or a
+		// ray-query compute dispatch consuming it (analog of VK's setMemoryBarrier).
+		D3D12_RESOURCE_BARRIER barrier = {};
+		barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+		barrier.UAV.pResource = m_buffer;
+		_commandList->ResourceBarrier(1, &barrier);
+	}
+
+	void AccelerationStructureD3D12::createTlas(ID3D12GraphicsCommandList4* _commandList, const D3D12_GPU_VIRTUAL_ADDRESS* _blasAddresses, uint16_t _num)
+	{
+		m_numInstances = _num;
+
+		// One instance per BLAS, identity transforms (rewritten by updateTlas). The upload
+		// heap keeps the mapped instance data persistent for cheap transform updates.
+		m_instanceBuffer = createCommittedResource(s_renderD3D12->m_device, HeapProperty::Upload, _num * sizeof(D3D12_RAYTRACING_INSTANCE_DESC) );
+
+		D3D12_RAYTRACING_INSTANCE_DESC* instances;
+		D3D12_RANGE readRange = { 0, 0 };
+		DX_CHECK(m_instanceBuffer->Map(0, &readRange, (void**)&instances) );
+		for (uint16_t ii = 0; ii < _num; ++ii)
+		{
+			D3D12_RAYTRACING_INSTANCE_DESC& instance = instances[ii];
+			bx::memSet(&instance, 0, sizeof(instance) );
+			instance.Transform[0][0] = 1.0f;
+			instance.Transform[1][1] = 1.0f;
+			instance.Transform[2][2] = 1.0f;
+			instance.InstanceID                          = ii;
+			instance.InstanceMask                        = 0xff;
+			instance.InstanceContributionToHitGroupIndex = 0;
+			instance.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
+			instance.AccelerationStructure               = _blasAddresses[ii];
+		}
+		m_instanceBuffer->Unmap(0, NULL);
+
+		buildTlas(_commandList, true);
+	}
+
+	void AccelerationStructureD3D12::updateTlas(ID3D12GraphicsCommandList4* _commandList, const float* _transforms)
+	{
+		// Rewrite the instance transforms. bx matrices are row-vector 4x4; DXR wants a 3x4
+		// row-major transform (D3D12_RAYTRACING_INSTANCE_DESC.Transform), i.e.
+		// Transform[i][j] = bx[j*4+i] (identical layout to VK's VkTransformMatrixKHR).
+		D3D12_RAYTRACING_INSTANCE_DESC* instances;
+		D3D12_RANGE readRange = { 0, 0 };
+		DX_CHECK(m_instanceBuffer->Map(0, &readRange, (void**)&instances) );
+		for (uint16_t ii = 0; ii < m_numInstances; ++ii)
+		{
+			const float* mtx = &_transforms[ii*16];
+			for (uint32_t row = 0; row < 3; ++row)
+			{
+				for (uint32_t col = 0; col < 4; ++col)
+				{
+					instances[ii].Transform[row][col] = mtx[col*4 + row];
+				}
+			}
+		}
+		m_instanceBuffer->Unmap(0, NULL);
+
+		buildTlas(_commandList, false);
+	}
+
+	void AccelerationStructureD3D12::buildTlas(ID3D12GraphicsCommandList4* _commandList, bool _create)
+	{
+		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
+		inputs.Type          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+		inputs.DescsLayout   = D3D12_ELEMENTS_LAYOUT_ARRAY;
+		inputs.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+		inputs.NumDescs      = m_numInstances;
+		inputs.InstanceDescs = m_instanceBuffer->GetGPUVirtualAddress();
+
+		if (_create)
+		{
+			D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuild = {};
+			s_renderD3D12->m_device5->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuild);
+
+			// The TLAS is fully rebuilt on every update (no ALLOW_UPDATE), so the scratch
+			// only ever needs the build size.
+			m_buffer        = createRtBuffer(s_renderD3D12->m_device, prebuild.ResultDataMaxSizeInBytes, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+			m_scratchBuffer = createRtBuffer(s_renderD3D12->m_device, prebuild.ScratchDataSizeInBytes, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+			m_deviceAddress = m_buffer->GetGPUVirtualAddress();
+		}
+
+		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC desc = {};
+		desc.Inputs                           = inputs;
+		desc.DestAccelerationStructureData    = m_deviceAddress;
+		desc.ScratchAccelerationStructureData = m_scratchBuffer->GetGPUVirtualAddress();
+
+		_commandList->BuildRaytracingAccelerationStructure(&desc, 0, NULL);
+
+		D3D12_RESOURCE_BARRIER barrier = {};
+		barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+		barrier.UAV.pResource = m_buffer;
+		_commandList->ResourceBarrier(1, &barrier);
+	}
+
+	void AccelerationStructureD3D12::destroy()
+	{
+		if (NULL != m_buffer)         { s_renderD3D12->m_cmd.release(m_buffer);         }
+		if (NULL != m_scratchBuffer)  { s_renderD3D12->m_cmd.release(m_scratchBuffer);  }
+		if (NULL != m_instanceBuffer) { s_renderD3D12->m_cmd.release(m_instanceBuffer); }
+
+		m_buffer         = NULL;
+		m_scratchBuffer  = NULL;
+		m_instanceBuffer = NULL;
+		m_deviceAddress  = 0;
+		m_numGeometries  = 0;
+		m_numInstances   = 0;
 	}
 
 	void ShaderD3D12::create(const Memory* _mem)
@@ -8653,6 +9005,23 @@ namespace bgfx { namespace d3d12
 													buffer.setState(m_commandList, D3D12_RESOURCE_STATE_GENERIC_READ);
 													scratchBuffer.allocSrv(srvHandle[stage], buffer, 0 != (currentRawSrvMask & (UINT32_C(1) << stage) ) );
 												}
+
+												++numSet;
+											}
+											break;
+
+										case Binding::AccelerationStructure:
+											{
+												// Bind the TLAS as a raytracing SRV: the view carries the AS GPU VA,
+												// not a resource, so the SRV resource is NULL (inline ray query).
+												const AccelerationStructureD3D12& as = m_accelerationStructures[bind.m_idx];
+
+												D3D12_SHADER_RESOURCE_VIEW_DESC srvd = {};
+												srvd.ViewDimension           = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
+												srvd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+												srvd.Format                  = DXGI_FORMAT_UNKNOWN;
+												srvd.RaytracingAccelerationStructure.Location = as.m_deviceAddress;
+												scratchBuffer.allocSrv(srvHandle[stage], NULL, srvd);
 
 												++numSet;
 											}
