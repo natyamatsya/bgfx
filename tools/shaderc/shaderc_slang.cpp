@@ -1435,6 +1435,16 @@ namespace bgfx
 	// stock front-end writes this in shaderc.cpp before dispatch; the Slang front-end
 	// bypasses that dispatch, so it writes the header itself -- shared by the SPIR-V and
 	// Metal bodies below.
+	// Ray-tracing source-stage chars (the stages that map to the RT magics below).
+	static bool isRayTracingStage(char _shaderType)
+	{
+		switch (_shaderType)
+		{
+		case 'r': case 'i': case 'a': case 'h': case 'm': case 'l': return true;
+		default: return false;
+		}
+	}
+
 	static void writeEnvelopeHeader(bx::WriterI* _writer, char _shaderType, uint32_t _inputHash, uint32_t _outputHash)
 	{
 		bx::ErrorAssert err;
@@ -1821,6 +1831,21 @@ namespace bgfx
 		}
 
 		writeEnvelope(_shaderWriter, _options.shaderType, uniforms, spirvBlob, attrIds, inputHash, outputHash);
+
+		// The DXIL ray-tracing envelope ends with the entry-point export name (length-
+		// prefixed): the D3D12 backend references shaders in the DXR state object -- hit groups
+		// and GetShaderIdentifier -- by DXIL export name, and Slang emits the source function
+		// name (not "main"). RT-stage magics (r/i/a/h/m/l) are unambiguously Slang-DXIL, so the
+		// runtime reads this only for those; SPIR-V/Metal and non-RT DXIL envelopes are
+		// unchanged (this is part of the RT-DXIL envelope, not a side channel).
+		if (ShadingLang::Dxil == _targetLang && isRayTracingStage(_options.shaderType) )
+		{
+			bx::ErrorAssert werr;
+			const char* epName = slang.EntryPoint_getName(epReflect);
+			const uint16_t nameLen = uint16_t(bx::strLen(epName) );
+			bx::write(_shaderWriter, nameLen, &werr);
+			bx::write(_shaderWriter, epName, nameLen, &werr);
+		}
 
 		return true;
 	}
