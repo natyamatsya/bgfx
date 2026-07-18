@@ -125,7 +125,18 @@ static bgfx::ShaderHandle loadShader(bx::FileReaderI* _reader, const bx::StringV
 
 	filePath.join(fileName);
 
-	bgfx::ShaderHandle handle = bgfx::createShader(loadMem(_reader, filePath.getCPtr() ) );
+	const bgfx::Memory* mem = loadMem(_reader, filePath.getCPtr() );
+	if (NULL == mem)
+	{
+		// loadMem already logged the missing file. Guard against passing NULL to
+		// createShader: its only check is a BX_ASSERT, compiled out in release, so
+		// the shader load would otherwise dereference NULL. Examples resolve shader
+		// binaries relative to the current directory -- run from examples/runtime.
+		DBG("Run the example from the examples/runtime directory.");
+		return BGFX_INVALID_HANDLE;
+	}
+
+	bgfx::ShaderHandle handle = bgfx::createShader(mem);
 	bgfx::setName(handle, _name.getPtr(), _name.getLength() );
 
 	return handle;
