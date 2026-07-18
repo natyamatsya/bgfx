@@ -381,6 +381,15 @@ static_assert(bx::isPowerOf2(BGFX_CONFIG_MAX_VIEWS), "BGFX_CONFIG_MAX_VIEWS must
 #	define BGFX_CONFIG_MAX_RT_SHADER_GROUPS 8
 #endif // BGFX_CONFIG_MAX_RT_SHADER_GROUPS
 
+// D3D12/DXR: opt in to the D3D12ExperimentalShaderModels feature (enabled before
+// device creation) so WARP and dev-mode hardware can load *unsigned* DXIL. Off by
+// default -- signed DXIL needs none of this, and enabling experimental features
+// affects every D3D12 device (not just ray tracing) and requires Windows Developer
+// Mode. Set to 1 only for a dev/CI harness that ships unsigned DXIL.
+#ifndef BGFX_CONFIG_D3D12_EXPERIMENTAL_SHADER_MODELS
+#	define BGFX_CONFIG_D3D12_EXPERIMENTAL_SHADER_MODELS 0
+#endif // BGFX_CONFIG_D3D12_EXPERIMENTAL_SHADER_MODELS
+
 /// Maximum number of vertex streams per draw call. Default is 4.
 #ifndef BGFX_CONFIG_MAX_VERTEX_STREAMS
 #	define BGFX_CONFIG_MAX_VERTEX_STREAMS 4
