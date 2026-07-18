@@ -377,6 +377,7 @@ namespace bgfx { namespace d3d12
 		PredefinedUniform m_predefined[PredefinedUniform::Count];
 		uint16_t m_attrMask[Attrib::Count];
 
+		char m_entryPoint[128]; // DXIL export name (ray-tracing stages only; else empty)
 		uint32_t m_hash;
 
 		uint32_t m_rawSrvMask;
@@ -395,6 +396,8 @@ namespace bgfx { namespace d3d12
 			: m_vsh(NULL)
 			, m_fsh(NULL)
 			, m_textureDimensionHash(0)
+			, m_stateObject(NULL)
+			, m_sbtBuffer(NULL)
 		{
 		}
 
@@ -423,13 +426,20 @@ namespace bgfx { namespace d3d12
 			m_textureDimensionHash = murmur.end();
 		}
 
-		void destroy()
-		{
-			m_numPredefined = 0;
-			m_vsh = NULL;
-			m_fsh = NULL;
-			m_textureDimensionHash = 0;
-		}
+		// Ray-tracing pipeline (M3): builds the DXR state object + shader binding table.
+		// Raygen provides the shared uniforms (stored as m_vsh, like the VK backend).
+		void createRt(
+			  const ShaderD3D12*  _rayGen
+			, const ShaderD3D12** _miss,         uint16_t _numMiss
+			, const ShaderD3D12** _closestHit
+			, const ShaderD3D12** _anyHit
+			, const ShaderD3D12** _intersection, uint16_t _numHitGroups
+			, const ShaderD3D12** _callable,     uint16_t _numCallables
+			);
+
+		void destroy();
+
+		bool isRayTracing() const { return NULL != m_stateObject; }
 
 		uint32_t getRawSrvMask() const
 		{
@@ -472,6 +482,11 @@ namespace bgfx { namespace d3d12
 		PredefinedUniform m_predefined[PredefinedUniform::Count * 2];
 		uint32_t m_textureDimensionHash;
 		uint8_t m_numPredefined;
+
+		// Ray-tracing pipeline state (NULL for graphics/compute programs).
+		ID3D12StateObject* m_stateObject;
+		ID3D12Resource*    m_sbtBuffer;            // shader binding table (upload heap)
+		D3D12_DISPATCH_RAYS_DESC m_dispatchRaysDesc; // SBT regions; Width/Height/Depth per dispatch
 	};
 
 	struct VideoDecoderD3D12;

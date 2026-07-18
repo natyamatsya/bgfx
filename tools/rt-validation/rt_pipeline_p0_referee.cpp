@@ -6,6 +6,8 @@
 #include <bgfx/bgfx.h>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 
 static const bgfx::Memory* loadBin(const char* path)
@@ -27,6 +29,17 @@ int main(int argc, char** argv)
 	bgfx::renderFrame();
 	bgfx::Init init;
 	init.type = bgfx::RendererType::Count;
+	// Optional Windows/CI overrides (default: auto-select). BGFX_RT_RENDERER forces the
+	// backend ("d3d12"/"vulkan"/"d3d11"); BGFX_RT_WARP=1 picks the software adapter (WARP on
+	// D3D12); BGFX_RT_DEBUG=1 enables the debug layer.
+	if (const char* r = getenv("BGFX_RT_RENDERER") )
+	{
+		if      (0 == strcmp(r, "d3d12")  || 0 == strcmp(r, "direct3d12") ) init.type = bgfx::RendererType::Direct3D12;
+		else if (0 == strcmp(r, "vulkan") || 0 == strcmp(r, "vk") )         init.type = bgfx::RendererType::Vulkan;
+		else if (0 == strcmp(r, "d3d11")  || 0 == strcmp(r, "direct3d11") ) init.type = bgfx::RendererType::Direct3D11;
+	}
+	if (NULL != getenv("BGFX_RT_WARP") )  { init.vendorId = BGFX_PCI_ID_SOFTWARE_RASTERIZER; }
+	if (NULL != getenv("BGFX_RT_DEBUG") ) { init.debug = true; }
 	init.resolution.width = 0; init.resolution.height = 0;
 	if (!bgfx::init(init) ) { printf("bgfx::init failed\n"); return 1; }
 
