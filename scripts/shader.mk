@@ -24,8 +24,9 @@ all:
 	@echo "  TARGET=7 (spirv)"
 	@echo "  TARGET=8 (wgsl)"
 
-# Backends to build shaders for. Override per-example -- e.g. Slang shaders currently
-# target only Metal (5) and SPIR-V (7), so those examples set SHADER_TARGETS := 5 7.
+# Backends to build shaders for. Override per-example -- e.g. Slang shaders target Metal
+# (5), SPIR-V (7) and DXIL (0), so those examples set SHADER_TARGETS := 5 7 (DXIL is added
+# by the Windows prepend below).
 SHADER_TARGETS ?= 3 4 5 7
 ifeq ($(OS), windows)
 SHADER_TARGETS := 0 1 $(SHADER_TARGETS)
@@ -53,7 +54,9 @@ ADDITIONAL_INCLUDES?=
 ifeq ($(TARGET), $(filter $(TARGET), 0))
 VS_FLAGS=--platform windows -p s_6_0 -O 3
 FS_FLAGS=--platform windows -p s_6_0 -O 3
-CS_FLAGS=--platform windows -p s_6_0 -O 3
+# Compute is s_6_5: inline ray query (RayQuery / DXR 1.1) requires it. Graphics stays at the
+# DXIL baseline (s_6_0) so non-RT examples keep the lower shader-model floor.
+CS_FLAGS=--platform windows -p s_6_5 -O 3
 SHADER_PATH=shaders/dxil
 else
 ifeq ($(TARGET), $(filter $(TARGET), 1))
