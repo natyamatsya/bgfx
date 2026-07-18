@@ -524,6 +524,8 @@ namespace bgfx { namespace d3d12
 	static const GUID IID_ID3D12Resource1             = { 0x9d5e227a, 0x4430, 0x4161, { 0x88, 0xb3, 0x3e, 0xca, 0x6b, 0xb1, 0x6e, 0x19 } };
 	static const GUID IID_ID3D12Resource2             = { 0xbe36ec3b, 0xea85, 0x4aeb, { 0xa4, 0x5a, 0xe9, 0xd7, 0x64, 0x04, 0xa4, 0x95 } };
 	static const GUID IID_ID3D12RootSignature         = { 0xc54a6b66, 0x72df, 0x4ee8, { 0x8b, 0xe5, 0xa9, 0x46, 0xa1, 0x42, 0x92, 0x14 } };
+	static const GUID IID_ID3D12StateObject           = { 0x47016943, 0xfca8, 0x4594, { 0x93, 0xea, 0xaf, 0x25, 0x8b, 0x55, 0x34, 0x6d } };
+	static const GUID IID_ID3D12StateObjectProperties = { 0xde5fa827, 0x9bf9, 0x4f26, { 0x89, 0xff, 0xd7, 0xf5, 0x6f, 0xde, 0x38, 0x60 } };
 	BX_PRAGMA_DIAGNOSTIC_POP();
 
 	static const GUID s_d3dDeviceIIDs[] =
@@ -865,6 +867,7 @@ namespace bgfx { namespace d3d12
 			, m_directAccessSupport(false)
 			, m_variableRateShadingSupport(false)
 			, m_rayTracingSupport(false)
+			, m_rayTracingPipelineSupport(false)
 			, m_mipGen(NULL)
 			, m_zeroInitBuffer(NULL)
 		{
@@ -1245,27 +1248,27 @@ namespace bgfx { namespace d3d12
 				break;
 			}
 
+			// DXR needs ID3D12Device5 (state objects / GetRaytracingAccelerationStructure-
+			// PrebuildInfo) -- available iff the device reached interface version 5. Inline ray
+			// query (RayQuery, SM 6.5) requires Tier 1_1; the ray-tracing pipeline works at
+			// Tier 1_0. Device5 is cached (below) for both paths; released in shutdown.
 			for (D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5; SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &options5, sizeof(options5) ) );)
 			{
 				BX_TRACE("D3D12 options 5:");
 				BX_TRACE("\tSRVOnlyTiledResourceTier3 %d", options5.SRVOnlyTiledResourceTier3);
 				BX_TRACE("\tRenderPassesTier %d", options5.RenderPassesTier);
 				BX_TRACE("\tRaytracingTier %d", options5.RaytracingTier);
-				// Inline ray query (RayQuery, SM 6.5) is a Tier 1_1 feature; Tier 1_0 only
-				// supports the RT pipeline (M3). BGFX_CAPS_RAY_TRACING here means inline query.
-				m_rayTracingSupport = options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1;
+				const bool hasDevice5 = m_deviceInterfaceVersion >= 5;
+				m_rayTracingSupport         = hasDevice5 && options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1;
+				m_rayTracingPipelineSupport = hasDevice5 && options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0;
 				break;
 			}
 
-			// DXR needs ID3D12Device5 (GetRaytracingAccelerationStructurePrebuildInfo) --
-			// available iff the device reached interface version 5 (already probed above).
-			// Cache it for the AS build path; released in shutdown.
-			m_rayTracingSupport = m_rayTracingSupport && m_deviceInterfaceVersion >= 5;
-			if (m_rayTracingSupport)
+			if (m_rayTracingSupport || m_rayTracingPipelineSupport)
 			{
 				DX_CHECK(m_device->QueryInterface(IID_ID3D12Device5, (void**)&m_device5) );
 			}
-			BX_TRACE("Ray tracing (inline query) support: %d", m_rayTracingSupport);
+			BX_TRACE("Ray tracing support: inline query %d, pipeline %d", m_rayTracingSupport, m_rayTracingPipelineSupport);
 
 			for (D3D12_FEATURE_DATA_D3D12_OPTIONS6 options6; SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6, &options6, sizeof(options6) ) );)
 			{
@@ -1814,6 +1817,7 @@ namespace bgfx { namespace d3d12
 					| BGFX_CAPS_TEXTURE_READ_BACK
 					| (m_variableRateShadingSupport ? BGFX_CAPS_VARIABLE_RATE_SHADING : 0)
 					| (m_rayTracingSupport ? BGFX_CAPS_RAY_TRACING : 0)
+					| (m_rayTracingPipelineSupport ? BGFX_CAPS_RAY_TRACING_PIPELINE : 0)
 					| BGFX_CAPS_VERTEX_ATTRIB_HALF
 					| BGFX_CAPS_VERTEX_ATTRIB_UINT10
 					| BGFX_CAPS_VERTEX_ID
@@ -2413,8 +2417,18 @@ namespace bgfx { namespace d3d12
 
 		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, const ShaderHandle* _intersection, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) override
 		{
-			// M3 (RT_WINDOWS_ROADMAP.md): D3D12 ray-tracing pipeline (state objects + SBT).
-			BX_UNUSED(_handle, _rayGen, _miss, _numMiss, _closestHit, _anyHit, _intersection, _numHitGroups, _callable, _numCallables);
+			const ShaderD3D12* miss[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+			const ShaderD3D12* closestHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+			const ShaderD3D12* anyHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+			const ShaderD3D12* intersection[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+			const ShaderD3D12* callable[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+			for (uint16_t ii = 0; ii < _numMiss; ++ii)      { miss[ii]         = &m_shaders[_miss[ii].idx]; }
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii) { closestHit[ii]   = &m_shaders[_closestHit[ii].idx]; }
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii) { anyHit[ii]       = isValid(_anyHit[ii])       ? &m_shaders[_anyHit[ii].idx]       : NULL; }
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii) { intersection[ii] = isValid(_intersection[ii]) ? &m_shaders[_intersection[ii].idx] : NULL; }
+			for (uint16_t ii = 0; ii < _numCallables; ++ii) { callable[ii]     = &m_shaders[_callable[ii].idx]; }
+
+			m_program[_handle.idx].createRt(&m_shaders[_rayGen.idx], miss, _numMiss, closestHit, anyHit, intersection, _numHitGroups, callable, _numCallables);
 		}
 
 		void createTlas(AccelerationStructureHandle _handle, const AccelerationStructureHandle* _blases, uint16_t _num) override
@@ -4408,6 +4422,7 @@ namespace bgfx { namespace d3d12
 		bool m_directAccessSupport;
 		bool m_variableRateShadingSupport;
 		bool m_rayTracingSupport;
+		bool m_rayTracingPipelineSupport;
 
 		const MipGen* m_mipGen;
 		ID3D12Resource* m_zeroInitBuffer;
@@ -6140,6 +6155,230 @@ namespace bgfx { namespace d3d12
 		m_numInstances   = 0;
 	}
 
+	// Widen an ASCII string (DXR export names are ASCII) into a wchar buffer.
+	static void toWideAscii(wchar_t* _dst, uint32_t _dstSize, const char* _src)
+	{
+		uint32_t ii = 0;
+		for (; '\0' != _src[ii] && ii < _dstSize-1; ++ii)
+		{
+			_dst[ii] = wchar_t(uint8_t(_src[ii]) );
+		}
+		_dst[ii] = L'\0';
+	}
+
+	void ProgramD3D12::createRt(
+		  const ShaderD3D12*  _rayGen
+		, const ShaderD3D12** _miss,         uint16_t _numMiss
+		, const ShaderD3D12** _closestHit
+		, const ShaderD3D12** _anyHit
+		, const ShaderD3D12** _intersection, uint16_t _numHitGroups
+		, const ShaderD3D12** _callable,     uint16_t _numCallables
+		)
+	{
+		// The state object + SBT are built eagerly here (unlike the VK backend, which defers
+		// to a cached getRtPipeline): a DXR state object is 1:1 with the program and not
+		// parameterized by draw state, so there is nothing to defer for, and this matches the
+		// backend's eager createBlas/createTlas.
+		ID3D12Device5* device = s_renderD3D12->m_device5;
+
+		// Raygen provides the shared uniforms (mirrors the VK backend's m_vsh = raygen).
+		m_vsh = _rayGen;
+		m_fsh = NULL;
+		bx::memCopy(m_predefined, _rayGen->m_predefined, _rayGen->m_numPredefined*sizeof(PredefinedUniform) );
+		m_numPredefined = _rayGen->m_numPredefined;
+
+		// Flatten shaders into one export list (raygen, miss[], and per hit group its
+		// closest-hit + present any-hit + present intersection, then callable[]). Each becomes
+		// a DXIL library with a unique export name "eN" renamed from its Slang entry point --
+		// DXR requires unique export names, and the Slang names can collide across shaders.
+		enum { kMaxShaders = 1 + 5*BGFX_CONFIG_MAX_RT_SHADER_GROUPS };
+		const ShaderD3D12* shaders[kMaxShaders];
+		wchar_t exportName[kMaxShaders][8];   // L"eNNN"
+		wchar_t renameFrom[kMaxShaders][128]; // widened entry point (matches ShaderD3D12::m_entryPoint)
+		uint32_t chitExport [BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+		uint32_t ahitExport [BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+		uint32_t isectExport[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+		uint32_t numShaders = 0;
+
+		const uint32_t rayGenExport = numShaders;
+		shaders[numShaders++] = _rayGen;
+
+		const uint32_t missExport = numShaders;
+		for (uint16_t ii = 0; ii < _numMiss; ++ii) { shaders[numShaders++] = _miss[ii]; }
+
+		for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
+		{
+			chitExport[ii] = numShaders; shaders[numShaders++] = _closestHit[ii];
+			ahitExport[ii]  = UINT32_MAX;
+			isectExport[ii] = UINT32_MAX;
+			if (NULL != _anyHit && NULL != _anyHit[ii])             { ahitExport[ii]  = numShaders; shaders[numShaders++] = _anyHit[ii]; }
+			if (NULL != _intersection && NULL != _intersection[ii]) { isectExport[ii] = numShaders; shaders[numShaders++] = _intersection[ii]; }
+		}
+
+		const uint32_t callableExport = numShaders;
+		for (uint16_t ii = 0; ii < _numCallables; ++ii) { shaders[numShaders++] = _callable[ii]; }
+
+		for (uint32_t ii = 0; ii < numShaders; ++ii)
+		{
+			char tmp[8];
+			bx::snprintf(tmp, sizeof(tmp), "e%u", ii);
+			toWideAscii(exportName[ii], BX_COUNTOF(exportName[ii]), tmp);
+			toWideAscii(renameFrom[ii], BX_COUNTOF(renameFrom[ii]), shaders[ii]->m_entryPoint);
+		}
+
+		// State-object subobjects: one DXIL library per shader, one hit group per group, plus
+		// shader config, pipeline config and the global root signature.
+		D3D12_EXPORT_DESC       exportDescs[kMaxShaders];
+		D3D12_DXIL_LIBRARY_DESC libDescs[kMaxShaders];
+		D3D12_HIT_GROUP_DESC    hitGroupDescs[BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+		wchar_t                 hitGroupName[BGFX_CONFIG_MAX_RT_SHADER_GROUPS][8];
+		D3D12_STATE_SUBOBJECT   subobjects[kMaxShaders + BGFX_CONFIG_MAX_RT_SHADER_GROUPS + 3];
+		uint32_t numSubobjects = 0;
+
+		for (uint32_t ii = 0; ii < numShaders; ++ii)
+		{
+			exportDescs[ii].Name           = exportName[ii];
+			exportDescs[ii].Flags          = D3D12_EXPORT_FLAG_NONE;
+			exportDescs[ii].ExportToRename = renameFrom[ii];
+
+			libDescs[ii].DXILLibrary.pShaderBytecode = shaders[ii]->m_code->data;
+			libDescs[ii].DXILLibrary.BytecodeLength  = shaders[ii]->m_code->size;
+			libDescs[ii].NumExports = 1;
+			libDescs[ii].pExports   = &exportDescs[ii];
+
+			subobjects[numSubobjects].Type  = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
+			subobjects[numSubobjects].pDesc = &libDescs[ii];
+			++numSubobjects;
+		}
+
+		for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
+		{
+			char tmp[8];
+			bx::snprintf(tmp, sizeof(tmp), "hg%u", ii);
+			toWideAscii(hitGroupName[ii], BX_COUNTOF(hitGroupName[ii]), tmp);
+
+			hitGroupDescs[ii].HitGroupExport           = hitGroupName[ii];
+			hitGroupDescs[ii].Type                     = UINT32_MAX != isectExport[ii] ? D3D12_HIT_GROUP_TYPE_PROCEDURAL_PRIMITIVE : D3D12_HIT_GROUP_TYPE_TRIANGLES;
+			hitGroupDescs[ii].AnyHitShaderImport       = UINT32_MAX != ahitExport[ii]  ? exportName[ahitExport[ii]]  : NULL;
+			hitGroupDescs[ii].ClosestHitShaderImport   = exportName[chitExport[ii]];
+			hitGroupDescs[ii].IntersectionShaderImport = UINT32_MAX != isectExport[ii] ? exportName[isectExport[ii]] : NULL;
+
+			subobjects[numSubobjects].Type  = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
+			subobjects[numSubobjects].pDesc = &hitGroupDescs[ii];
+			++numSubobjects;
+		}
+
+		// MaxPayloadSizeInBytes is a hard ceiling DXR enforces: a shader whose ray payload
+		// exceeds it fails CreateStateObject. bgfx has no payload-size reflection yet, so use a
+		// conservative constant (a couple of float4s). TODO: derive from shader reflection.
+		// MaxAttributeSizeInBytes uses the spec max (barycentrics need 8).
+		const uint32_t kMaxPayloadSize = 64;
+		D3D12_RAYTRACING_SHADER_CONFIG shaderConfig;
+		shaderConfig.MaxPayloadSizeInBytes   = kMaxPayloadSize;
+		shaderConfig.MaxAttributeSizeInBytes = D3D12_RAYTRACING_MAX_ATTRIBUTE_SIZE_IN_BYTES;
+		subobjects[numSubobjects].Type  = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
+		subobjects[numSubobjects].pDesc = &shaderConfig;
+		++numSubobjects;
+
+		D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig;
+		pipelineConfig.MaxTraceRecursionDepth = 2; // permits one secondary ray from a hit shader
+		subobjects[numSubobjects].Type  = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
+		subobjects[numSubobjects].pDesc = &pipelineConfig;
+		++numSubobjects;
+
+		// Global root signature: reuse the compute root signature (Sampler/SRV/CBV/UAV tables,
+		// space 0) -- it already satisfies t0 (TLAS SRV) / u1,u2 (UAVs) / b0 (uniforms CBV) and
+		// is the same object bound via SetComputeRootSignature at dispatch. The SBT therefore
+		// carries shader identifiers only (no local root arguments). Known limitation: RT
+		// shaders are constrained to this fixed layout; a dedicated per-program root signature
+		// (cf. VK's dedup-by-binding union) is future work.
+		D3D12_GLOBAL_ROOT_SIGNATURE globalRootSig;
+		globalRootSig.pGlobalRootSignature = s_renderD3D12->m_computeRootSignature;
+		subobjects[numSubobjects].Type  = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
+		subobjects[numSubobjects].pDesc = &globalRootSig;
+		++numSubobjects;
+
+		D3D12_STATE_OBJECT_DESC desc;
+		desc.Type          = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+		desc.NumSubobjects = numSubobjects;
+		desc.pSubobjects   = subobjects;
+		DX_CHECK(device->CreateStateObject(&desc, IID_ID3D12StateObject, (void**)&m_stateObject) );
+
+		// Shader binding table (upload heap): one 32-byte shader identifier per record.
+		ID3D12StateObjectProperties* props;
+		DX_CHECK(m_stateObject->QueryInterface(IID_ID3D12StateObjectProperties, (void**)&props) );
+
+		const uint32_t handleSize   = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
+		const uint32_t recordStride = bx::alignUp(handleSize, uint32_t(D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT) );
+		const uint32_t tableAlign   = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
+		const uint32_t rayGenSize   = bx::alignUp(recordStride,                 tableAlign);
+		const uint32_t missSize     = bx::alignUp(_numMiss*recordStride,        tableAlign);
+		const uint32_t hitSize      = bx::alignUp(_numHitGroups*recordStride,   tableAlign);
+		const uint32_t callableSize = bx::alignUp(_numCallables*recordStride,   tableAlign);
+		const uint32_t sbtSize      = rayGenSize + missSize + hitSize + callableSize;
+
+		m_sbtBuffer = createCommittedResource(s_renderD3D12->m_device, HeapProperty::Upload, sbtSize);
+
+		uint8_t* sbt;
+		D3D12_RANGE readRange = { 0, 0 };
+		DX_CHECK(m_sbtBuffer->Map(0, &readRange, (void**)&sbt) );
+		bx::memSet(sbt, 0, sbtSize);
+		bx::memCopy(sbt, props->GetShaderIdentifier(exportName[rayGenExport]), handleSize);
+		for (uint16_t ii = 0; ii < _numMiss; ++ii)
+		{
+			bx::memCopy(sbt + rayGenSize + ii*recordStride, props->GetShaderIdentifier(exportName[missExport+ii]), handleSize);
+		}
+		for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
+		{
+			bx::memCopy(sbt + rayGenSize + missSize + ii*recordStride, props->GetShaderIdentifier(hitGroupName[ii]), handleSize);
+		}
+		for (uint16_t ii = 0; ii < _numCallables; ++ii)
+		{
+			bx::memCopy(sbt + rayGenSize + missSize + hitSize + ii*recordStride, props->GetShaderIdentifier(exportName[callableExport+ii]), handleSize);
+		}
+		m_sbtBuffer->Unmap(0, NULL);
+		props->Release();
+
+		const D3D12_GPU_VIRTUAL_ADDRESS base = m_sbtBuffer->GetGPUVirtualAddress();
+		bx::memSet(&m_dispatchRaysDesc, 0, sizeof(m_dispatchRaysDesc) );
+		m_dispatchRaysDesc.RayGenerationShaderRecord.StartAddress = base;
+		m_dispatchRaysDesc.RayGenerationShaderRecord.SizeInBytes  = recordStride;
+		m_dispatchRaysDesc.MissShaderTable.StartAddress  = base + rayGenSize;
+		m_dispatchRaysDesc.MissShaderTable.SizeInBytes   = uint64_t(_numMiss)*recordStride;
+		m_dispatchRaysDesc.MissShaderTable.StrideInBytes = recordStride;
+		m_dispatchRaysDesc.HitGroupTable.StartAddress    = base + rayGenSize + missSize;
+		m_dispatchRaysDesc.HitGroupTable.SizeInBytes     = uint64_t(_numHitGroups)*recordStride;
+		m_dispatchRaysDesc.HitGroupTable.StrideInBytes   = recordStride;
+		if (_numCallables > 0)
+		{
+			m_dispatchRaysDesc.CallableShaderTable.StartAddress  = base + rayGenSize + missSize + hitSize;
+			m_dispatchRaysDesc.CallableShaderTable.SizeInBytes   = uint64_t(_numCallables)*recordStride;
+			m_dispatchRaysDesc.CallableShaderTable.StrideInBytes = recordStride;
+		}
+	}
+
+	void ProgramD3D12::destroy()
+	{
+		m_numPredefined = 0;
+		m_vsh = NULL;
+		m_fsh = NULL;
+
+		// Defer both to the fence-keyed release queue: a previously-submitted frame's
+		// DispatchRays may still be reading the SBT and state object on the GPU. The queue
+		// only calls Release() (the shared IUnknown slot), so an ID3D12StateObject frees
+		// correctly through the ID3D12Resource* queue.
+		if (NULL != m_sbtBuffer)
+		{
+			s_renderD3D12->m_cmd.release(m_sbtBuffer);
+			m_sbtBuffer = NULL;
+		}
+		if (NULL != m_stateObject)
+		{
+			s_renderD3D12->m_cmd.release( (ID3D12Resource*)m_stateObject);
+			m_stateObject = NULL;
+		}
+	}
+
 	void ShaderD3D12::create(const Memory* _mem)
 	{
 		bx::MemoryReader reader(_mem->data, _mem->size);
@@ -6298,6 +6537,19 @@ namespace bgfx { namespace d3d12
 		m_hash = murmur.end();
 
 		bx::read(&reader, m_size, &err);
+
+		// Ray-tracing DXIL envelopes append the entry-point export name (length-prefixed) --
+		// the DXR state object references shaders in hit groups and GetShaderIdentifier by
+		// their DXIL export name (see shaderc_slang.cpp). Non-RT shaders leave it empty.
+		m_entryPoint[0] = '\0';
+		if (isRayTracingShaderType(magic) )
+		{
+			uint16_t nameLen = 0;
+			bx::read(&reader, nameLen, &err);
+			nameLen = bx::min<uint16_t>(nameLen, BX_COUNTOF(m_entryPoint) - 1);
+			bx::read(&reader, m_entryPoint, nameLen, &err);
+			m_entryPoint[nameLen] = '\0';
+		}
 	}
 
 	static void memcpySubresource(
@@ -8304,6 +8556,7 @@ namespace bgfx { namespace d3d12
 		bool     hasPredefined          = false;
 		bool     commandListChanged     = false;
 		ID3D12PipelineState* currentPso = NULL;
+		ID3D12StateObject* currentStateObject = NULL; // ray-tracing pipeline (SetPipelineState1)
 		m_lastPso = NULL;
 		SortKey key;
 		uint16_t view = UINT16_MAX;
@@ -8433,6 +8686,7 @@ namespace bgfx { namespace d3d12
 
 					view = key.m_view;
 					currentPso = NULL;
+					currentStateObject = NULL; // fresh command list: nothing bound
 					currentSamplerStateIdx = kInvalidHandle;
 					currentProgram         = BGFX_INVALID_HANDLE;
 					hasPredefined          = false;
@@ -8560,12 +8814,33 @@ namespace bgfx { namespace d3d12
 						}
 					}
 
-					ID3D12PipelineState* pso = getPipelineState(key.m_program);
-					if (pso != currentPso)
+					ProgramD3D12& program = m_program[key.m_program.idx];
+					const bool isRayTracing = program.isRayTracing();
+
+					if (isRayTracing)
 					{
-						currentPso = pso;
-						m_commandList->SetPipelineState(pso);
-						currentBindIdx = UINT32_MAX;
+						// Ray-tracing pipeline: bind the DXR state object instead of a compute
+						// PSO. Resources bind through the same (global == compute) root signature.
+						if (program.m_stateObject != currentStateObject)
+						{
+							currentStateObject = program.m_stateObject;
+							currentPso = NULL;
+							ID3D12GraphicsCommandList4* commandList = getCommandListRt();
+							commandList->SetPipelineState1(program.m_stateObject);
+							commandList->Release();
+							currentBindIdx = UINT32_MAX;
+						}
+					}
+					else
+					{
+						ID3D12PipelineState* pso = getPipelineState(key.m_program);
+						if (pso != currentPso)
+						{
+							currentPso = pso;
+							currentStateObject = NULL;
+							m_commandList->SetPipelineState(pso);
+							currentBindIdx = UINT32_MAX;
+						}
 					}
 
 					if (currentBindIdx != bindIdx)
@@ -8730,7 +9005,18 @@ namespace bgfx { namespace d3d12
 						m_commandList->SetComputeRootConstantBufferView(ComputeRp::CBV, gpuAddress);
 					}
 
-					if (isValid(compute.m_indirectBuffer) )
+					if (isRayTracing)
+					{
+						// Ray-grid dimensions arrive as the dispatch grid (rays, not groups).
+						D3D12_DISPATCH_RAYS_DESC drd = program.m_dispatchRaysDesc;
+						drd.Width  = compute.m_numX;
+						drd.Height = compute.m_numY;
+						drd.Depth  = compute.m_numZ;
+						ID3D12GraphicsCommandList4* commandList = getCommandListRt();
+						commandList->DispatchRays(&drd);
+						commandList->Release();
+					}
+					else if (isValid(compute.m_indirectBuffer) )
 					{
 						VertexBufferD3D12& indirect = m_vertexBuffers[compute.m_indirectBuffer.idx];
 						indirect.setState(m_commandList, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
@@ -8836,6 +9122,7 @@ namespace bgfx { namespace d3d12
 						m_commandList->SetDescriptorHeaps(BX_COUNTOF(heaps), heaps);
 
 						currentPso             = NULL;
+						currentStateObject     = NULL; // fresh command list: nothing bound
 						currentBindIdx         = UINT32_MAX;
 						currentSamplerStateIdx = kInvalidHandle;
 						currentProgram         = BGFX_INVALID_HANDLE;
@@ -9107,6 +9394,7 @@ namespace bgfx { namespace d3d12
 					if (pso != currentPso)
 					{
 						currentPso = pso;
+						currentStateObject = NULL; // a graphics PSO unbinds any RT state object
 						m_commandList->SetPipelineState(pso);
 					}
 
