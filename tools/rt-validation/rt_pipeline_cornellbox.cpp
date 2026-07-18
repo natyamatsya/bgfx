@@ -4,6 +4,7 @@
 #include <bgfx/bgfx.h>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <vector>
@@ -132,7 +133,12 @@ int main(int argc,char**argv){
 	// usage: <cs_rq.bin> <rg.bin> <miss.bin> <shadow.bin> <chit.bin>
 	if(argc<6){printf("usage: %s <cs_rq.bin> <rg.bin> <miss.bin> <shadow.bin> <chit.bin>\n",argv[0]);return 1;}
 	bgfx::renderFrame();
-	bgfx::Init init; init.type=bgfx::RendererType::Count; init.resolution.width=0; init.resolution.height=0;
+	bgfx::Init init; init.type=bgfx::RendererType::Count;
+	// Windows/CI overrides: BGFX_RT_RENDERER forces the backend, BGFX_RT_WARP=1 the software adapter.
+	if(const char*r=getenv("BGFX_RT_RENDERER")){ if(!strcmp(r,"d3d12")||!strcmp(r,"direct3d12"))init.type=bgfx::RendererType::Direct3D12; else if(!strcmp(r,"vulkan")||!strcmp(r,"vk"))init.type=bgfx::RendererType::Vulkan; else if(!strcmp(r,"d3d11")||!strcmp(r,"direct3d11"))init.type=bgfx::RendererType::Direct3D11; }
+	if(getenv("BGFX_RT_WARP"))init.vendorId=BGFX_PCI_ID_SOFTWARE_RASTERIZER;
+	if(getenv("BGFX_RT_DEBUG"))init.debug=true;
+	init.resolution.width=0; init.resolution.height=0;
 	if(!bgfx::init(init))return 1;
 	const uint64_t sup=bgfx::getCaps()->supported;
 	if(0==(sup&BGFX_CAPS_RAY_TRACING_PIPELINE)){printf("RESULT: SKIP (no RT pipeline)\n");bgfx::shutdown();return 0;}
