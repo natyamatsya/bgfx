@@ -1,13 +1,16 @@
 # bgfx × Ray Tracing — Runtime Roadmap
 
-> Status: **Complete through phase 6 (Metal verified on-device).** The acceleration-structure
-> runtime exists end-to-end: public API (`createBlas`/`createTlas`/`setAccelerationStructure`),
-> Vulkan + Metal backends, and the Cornell Box example rendering via hardware ray query with
-> the analytic compute fallback kept for hardware without `BGFX_CAPS_RAY_TRACING`. The Metal
-> path is verified on-device; the Vulkan path is validated end-to-end against Mesa's
-> lavapipe (software `VK_KHR_ray_query`) with cross-backend image agreement vs Metal --
-> see `tools/rt-validation/`. Validation on real RT hardware remains a nice-to-have. Written to be idiomatic to bgfx so the work has a
-> realistic chance of being **upstreamed** (companion to `SLANG_ROADMAP.md`).
+> Status: **Complete through phase 6 (Metal verified on-device); D3D12/DXR port complete
+> (see `RT_WINDOWS_ROADMAP.md`).** The acceleration-structure runtime exists end-to-end:
+> public API (`createBlas`/`createTlas`/`setAccelerationStructure`), **Vulkan + Metal + D3D12**
+> backends, and the Cornell Box example rendering via hardware ray query with the analytic
+> compute fallback kept for hardware without `BGFX_CAPS_RAY_TRACING`. The Metal path is verified
+> on-device; the Vulkan path is validated against Mesa's lavapipe (software `VK_KHR_ray_query`)
+> and, alongside the D3D12/DXR backend, **on real RT hardware (RTX 4090)** with cross-backend
+> image agreement (D3D12 ≡ Vulkan) — see `tools/rt-validation/`. The D3D12/DXR backend (both
+> inline ray query and the ray-tracing pipeline) is tracked to completion in
+> `RT_WINDOWS_ROADMAP.md`. Written to be idiomatic to bgfx so the work has a realistic chance of
+> being **upstreamed** (companion to `SLANG_ROADMAP.md`).
 
 ## 1. Goal
 
