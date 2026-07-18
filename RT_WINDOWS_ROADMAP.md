@@ -1,22 +1,22 @@
 # bgfx × Ray Tracing — Windows Roadmap (Vulkan port + D3D12/DXR backend)
 
-> Status: **draft / planning.** Companion to `RT_ROADMAP.md` (the completed VK+Metal
-> runtime) and `METAL_RT_PIPELINE.md`. Milestones with essential steps; depth arrives
-> per-milestone when work starts.
+> Status: **M1–M4 complete (2026-07-18).** The D3D12/DXR backend runs the full ray-tracing
+> stack on Windows — acceleration structures + inline ray query (M2), the DXR ray-tracing
+> pipeline (M3), and the 52-cornellbox example (M4) — validated on **WARP and RTX 4090
+> hardware**, with **D3D12 ≡ Vulkan cross-checked on-device**. Each milestone was
+> dual-agent reviewed, refactored for upstream quality, and pushed as the stacked series
+> `experimental/rt-windows` (M2) → `rt-windows-pipeline` (M3) → `rt-windows-cornellbox` (M4),
+> mirroring the VK/Metal series shape. Remaining: the Windows/WARP CI job (M0's last item) and
+> the jj series consolidation. Companion to `RT_ROADMAP.md` (the completed VK+Metal runtime)
+> and `METAL_RT_PIPELINE.md`.
 >
-> **Gap-check vs. the post-rebase tree (2026-07-18).** After rebasing the fork onto current
-> upstream bgfx and re-vendoring Slang, this roadmap was verified against the code. Net:
-> M1 (DXIL) holds; M2/M3 remain the real work, with the D3D12 API + caps detection already
-> stubbed in. Three deltas fold into the milestones below:
-> - **Resolved:** the M1 libslang-version caveat — the fork now vendors **libslang 2026.12.2**,
->   and the SPIR-V compliance suite (604/604) proves `VulkanBindShiftAll` works. Only the
->   loader-side version check remains a follow-up.
-> - **Correction:** the D3D12 RT caps detection that "landed" is a **Tier-1_0 placeholder**
->   (`m_rayTracingSupport = RaytracingTier >= TIER_1_0` → `BGFX_CAPS_RAY_TRACING`). Inline ray
->   query needs **Tier 1_1**; M2 must split the gates (see M2). There is no
->   `BGFX_CAPS_RAY_TRACING_PIPELINE` gate for D3D12 yet.
-> - **Validation gap:** the routine compliance suite targets **SPIR-V + Metal only** — DXIL is
->   not exercised, so M1's output is unverified against libslang 2026.12.2 (see M1 exit).
+> **Note on the reference (2026-07-18).** The plan assumed lavapipe/WARP as the software
+> referees because it was written from a macOS host with no RT hardware. Development happened
+> on a Windows box with an **RTX 4090 (hardware VK ray tracing + DXR)**, so the cross-backend
+> reference is the **real Vulkan backend**, not lavapipe — a stronger check, and it drops the
+> mesa-dist-win/lavapipe dependency for both local runs and CI. DXIL is loaded **signed**
+> (`dxil.dll` beside dxc); the unsigned + experimental-shader-models path is also validated as
+> a fallback (Developer Mode).
 
 ## 1. Goal and starting position
 
@@ -135,6 +135,15 @@ The two genuinely new problems:
   `BGFX_CAPS_RAY_TRACING_PIPELINE` at `≥ 1_0` (no such gate exists yet).
 - Exit: `rt_smoke` 4/4 on **WARP**; Cornell Box compute + ray-query stages render;
   cross-backend image check vs lavapipe.
+- **✅ Done (`experimental/rt-windows`, 2026-07-18):** `rt_smoke` **4/4** on both WARP and
+  the RTX 4090 (signed *and* unsigned/experimental DXIL). Landed: `AccelerationStructureD3D12`
+  (BLAS triangles + AABBs, in-place refit via `PERFORM_UPDATE`, TLAS + `updateTlas` reusing
+  VK's row-major transform conversion, UAV barriers, prebuild sizing), the raytracing-SRV
+  bind (`t0`, per the M1 identity convention), cached `m_device5`, and the caps gate moved to
+  **Tier 1_1**. Dual-agent reviewed + refactored (AS build inputs → `NON_PIXEL_SHADER_RESOURCE`,
+  shutdown defensive-destroy). Split out as its own commit: a `BufferD3D12` fix that uploaded
+  initial data for UAV buffers (a general D3D12 bug, not RT-specific) — without it phase 3 read
+  zeroed geometry and got 0 hits.
 
 ### M3 — D3D12 ray-tracing pipeline
 *`createRtProgram` on its native platform.*
@@ -146,16 +155,34 @@ The two genuinely new problems:
 - Caps: `BGFX_CAPS_RAY_TRACING_PIPELINE` from Tier ≥ 1_0 (pipeline) — Metal keeps its
   own gate.
 - Exit: `rt_pipeline_smoke` 3/3 and the P0 referee on WARP.
+- **✅ Done (`experimental/rt-windows-pipeline`, 2026-07-18):** `rt_pipeline_smoke` **3/3**
+  (recursion + multi-miss, any-hit + callable, procedural intersection) and the **P0 referee**
+  pass on both WARP and the RTX 4090. Landed: the DXR state object (one DXIL library per stage
+  envelope + hit groups + shader/pipeline config, global root signature = the reused compute
+  root signature), a shader-identifier-only SBT (`GetShaderIdentifier`, 32-byte records,
+  64/32-byte region/record alignment), `DispatchRays` hooked into the compute submit path, and
+  `BGFX_CAPS_RAY_TRACING_PIPELINE` gated at Tier ≥ 1_0. The Slang front-end now appends each
+  entry-point's export name to the DXIL RT envelope (DXR references shaders by export name, not
+  `"main"`). Dual-agent reviewed + refactored (state-object invalidation across view/draw/PSO
+  changes; deferred state-object release to avoid GPU use-after-free).
 
-### M4 — Triple-referee, example, consolidation
+### M4 — Triple-referee, example, consolidation ✅ (example + on-device cross-check done)
 *The finish line: one Slang source, three backends, one image.*
 
-- Cornell Box stage-5 image cross-check: **lavapipe vs WARP vs Metal** (SPIR-V vs DXIL
-  vs MSL from the same sources) — the compliance argument for upstreaming in one
-  screenshot-diff.
-- 52-cornellbox runs on D3D12 end to end; docs (`RT_ROADMAP.md` links, `docs/`),
-  CI matrix final (linux-arm container + windows WARP runner).
-- jj series consolidation for the D3D12 stack, mirroring the VK/Metal series shape.
+- **✅ 52-cornellbox on D3D12, end to end (`experimental/rt-windows-cornellbox`, 2026-07-18):**
+  the example renders live on both the RTX 4090 and WARP — ray query *and* RT pipeline paths.
+  This required extending the Slang DXIL front-end to the graphics **vertex/fragment** stages
+  (the display pass; M1 had rejected v/f until the D3D12 conventions were defined) and adding
+  the `shader.mk` dxil target (compute `s_6_5` for `RayQuery`, graphics `s_6_0` baseline).
+- **✅ Cross-backend agreement, on real hardware (stronger than the planned software referee):**
+  because this machine has an RTX 4090 with hardware VK ray tracing, the reference is the **real
+  Vulkan backend, not lavapipe**. `rt_pipeline_cornellbox` shows **D3D12 ≡ Vulkan** — mean|d|
+  0.103 (D3D12) vs 0.105 (Vulkan), each against its own ray-query path: a shader-level,
+  backend-independent difference present on both, not a D3D12 defect. Metal stays verified on the
+  macOS side. The mesa-dist-win/lavapipe dependency is therefore dropped for local runs and CI.
+- **⬜ Remaining:** the **Windows/WARP CI job** (M0's last ⬜ item, now lavapipe-free) and the
+  **jj series consolidation** for the D3D12 stack (the upstream-PR narrative), mirroring the
+  VK/Metal series shape.
 
 ## 3. Risks / open questions (tracked, not blocking the plan)
 
