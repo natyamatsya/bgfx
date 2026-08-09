@@ -9,6 +9,7 @@
 
 #include <slang.h>
 #include <slang-com-ptr.h>
+#include <slang-tag-version.h> // SLANG_VERSION_NUMERIC of the vendored headers (see checkSlangVersion)
 
 #include "../../src/shader.h" // kSpirv* binding-shift constants (shared with shaderc_spirv.cpp)
 #include <spirv.hpp>          // spv::Op / spv::Decoration / spv::MagicNumber
@@ -875,6 +876,56 @@ namespace bgfx
 		}
 	}
 
+	// The vendored headers and the libslang loaded at runtime must be the same Slang
+	// version. CompilerOptionName is a value-assigned enum, so a version skew silently
+	// renumbers options: MetalRTGlobalsSlots was 159 in 2026.12.2 and is 161 in 2026.14.1
+	// (upstream inserted SeparateDebugInfoOutput/DebugInfoIncludeSource at 156/157). An
+	// older libslang would read 161 as some unrelated option and the native Metal RT path
+	// would miscompile with no diagnostic. Fail loudly instead.
+	//
+	// Only the numeric version is compared, not the full tag: the fork build reports
+	// "2026.14.1-73-gb3f2123d2" while a stock upstream release reports "2026.14.1", and
+	// both are supported (Windows uses a stock dll -- the SPIR-V/DXIL paths never pass the
+	// fork's Metal RT options). See 3rdparty/slang/README.md.
+	static bool checkSlangVersion(slang::IGlobalSession* _global, bx::WriterI* _messageWriter)
+	{
+		bx::ErrorAssert err;
+
+		const char* tag = _global->getBuildTagString();
+		if (NULL == tag)
+		{
+			tag = "unknown";
+		}
+
+		const bx::StringView runtime(tag);
+		const bx::StringView expect(SLANG_VERSION_NUMERIC);
+
+		// The tag is "<numeric>" or "<numeric>-<n>-g<sha>", so the header's numeric version
+		// must be a prefix ending at a '-' or at end-of-string.
+		const bool match = runtime.getLength() >= expect.getLength()
+			&& 0 == bx::strCmp(bx::StringView(runtime.getPtr(), expect.getLength() ), expect)
+			&& (runtime.getLength() == expect.getLength() || '-' == runtime.getPtr()[expect.getLength()])
+			;
+
+		if (!match)
+		{
+			bx::write(_messageWriter, &err
+				, "Error: Slang version mismatch. The vendored headers are %s but the loaded "
+				  "libslang reports '%s'.\n"
+				  "       They must match: CompilerOptionName values are version-specific, so a "
+				  "skew silently miscompiles.\n"
+				  "       Rebuild/replace libslang from the natyamatsya/slang fork at %s, or see "
+				  "3rdparty/slang/README.md.\n"
+				, SLANG_VERSION_NUMERIC
+				, tag
+				, SLANG_TAG_VERSION
+				);
+			return false;
+		}
+
+		return true;
+	}
+
 	static Slang::ComPtr<slang::ISession> createSlangSession(slang::IGlobalSession* _global, ShadingLang::Enum _targetLang, bool _nativeMetalRT, uint32_t _metalRtGlobalsSlots, uint32_t _profileId, int32_t _uboBinding, bx::WriterI* _messageWriter)
 	{
 		slang::TargetDesc target = {};
@@ -1698,6 +1749,11 @@ namespace bgfx
 		||  !global)
 		{
 			bx::write(_messageWriter, &messageErr, "Error: Slang createGlobalSession failed.\n");
+			return false;
+		}
+
+		if (!checkSlangVersion(global, _messageWriter) )
+		{
 			return false;
 		}
 
