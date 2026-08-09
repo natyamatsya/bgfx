@@ -1683,7 +1683,7 @@ namespace bgfx
 		}
 
 		// DXIL scope: compute, the six ray-tracing stages (M1/M3), and graphics vertex/
-		// fragment stages (M4 -- e.g. the 52-cornellbox display pass on D3D12). Slang emits
+		// fragment stages (M4 -- e.g. the 54-cornellbox display pass on D3D12). Slang emits
 		// SM 6.x DXIL for v/f directly; the register()-pass-through convention and the vertex
 		// attribute table are the same as the SPIR-V path.
 

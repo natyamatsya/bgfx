@@ -6,7 +6,7 @@
 > `metal-rt-spec`; implementation P0..P4 + instance transforms + the payload-size
 > option, pay-for-use world_space_data + the cross-module force options,
 > commits `55cc3316..d8de004d`) -- and bgfx's
-> shaderc + Metal backend now run the 52-cornellbox RT-pipeline stage on Metal.
+> shaderc + Metal backend now run the 54-cornellbox RT-pipeline stage on Metal.
 > Building the Metal RT shaders requires that compiler: point shaderc's dynamic
 > libslang at the fork's build (`DYLD_LIBRARY_PATH=<slang>/build/Release/lib`).
 > The staged on-device proofs live in `tools/rt-validation/metal_rt_pipeline_p{0,1,3,4}.cpp`;
