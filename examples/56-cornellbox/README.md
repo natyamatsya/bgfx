@@ -1,4 +1,4 @@
-# 52-cornellbox
+# 56-cornellbox
 
 The classic **Cornell Box**, path traced in a **Slang** shader — with real global
 illumination (colour bleeding, soft shadows) via progressive Monte Carlo accumulation.
