@@ -589,9 +589,9 @@ or _OPTIONS["with-combined-examples"] then
 		, "49-hextile"
 		, "51-gpufont"
 		, "52-layered"
-		, "52-cornellbox"
 		, "53-sky2"
 		, "54-s2h"
+		, "55-cornellbox"
 		)
 
 
