@@ -2,7 +2,7 @@
 
 > Status: **M1–M4 complete (2026-07-18).** The D3D12/DXR backend runs the full ray-tracing
 > stack on Windows — acceleration structures + inline ray query (M2), the DXR ray-tracing
-> pipeline (M3), and the 52-cornellbox example (M4) — validated on **WARP and RTX 4090
+> pipeline (M3), and the 54-cornellbox example (M4) — validated on **WARP and RTX 4090
 > hardware**, with **D3D12 ≡ Vulkan cross-checked on-device**. Each milestone was
 > dual-agent reviewed, refactored for upstream quality, and pushed as the stacked series
 > `experimental/rt-windows` (M2) → `rt-windows-pipeline` (M3) → `rt-windows-cornellbox` (M4),
@@ -169,7 +169,7 @@ The two genuinely new problems:
 ### M4 — Triple-referee, example, consolidation ✅ (example + on-device cross-check done)
 *The finish line: one Slang source, three backends, one image.*
 
-- **✅ 52-cornellbox on D3D12, end to end (`experimental/rt-windows-cornellbox`, 2026-07-18):**
+- **✅ 54-cornellbox on D3D12, end to end (`experimental/rt-windows-cornellbox`, 2026-07-18):**
   the example renders live on both the RTX 4090 and WARP — ray query *and* RT pipeline paths.
   This required extending the Slang DXIL front-end to the graphics **vertex/fragment** stages
   (the display pass; M1 had rejected v/f until the D3D12 conventions were defined) and adding

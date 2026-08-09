@@ -734,7 +734,7 @@ public:
 
 ENTRY_IMPLEMENT_MAIN(
 	  ExampleCornellBox
-	, "52-cornellbox"
+	, "54-cornellbox"
 	, "Cornell Box path traced in a Slang shader (ray query + compute fallback)."
 	, "https://bkaradzic.github.io/bgfx/examples.html#cornellbox"
 	);

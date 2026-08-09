@@ -10,7 +10,7 @@ dispatch) without a window, on any backend reporting `BGFX_CAPS_RAY_TRACING`.
   (4) refit: a compute shader (`cs_rt_deform.slang`) moves the vertices of a
   `BGFX_BUFFER_COMPUTE_WRITE` vertex buffer off the ray, `updateBlas` refits in place
   (expects a miss).
-- `rt_cornellbox.cpp` — the full 52-cornellbox pipeline (tracer + temporal reprojection +
+- `rt_cornellbox.cpp` — the full 54-cornellbox pipeline (tracer + temporal reprojection +
   a-trous denoiser + ReSTIR stage) writing PPM images for cross-backend comparison. Uses
   the example's compiled shaders from `examples/runtime/shaders/<target>/`.
 - `cs_rt_smoke.slang` — the smoke test's ray-query shader; compile with shaderc for the

@@ -24,7 +24,7 @@ Why ray-query-first:
   **acceleration structure**.
 - It reuses the frozen shader envelope (a ray-query shader is a `CSH`).
 - It is the shorter road to a rendered image on **both** Vulkan and Metal, and it is the
-  path the [52-cornellbox](examples/52-cornellbox) example's accelerated mode will take,
+  path the [54-cornellbox](examples/54-cornellbox) example's accelerated mode will take,
   with the analytic compute shader as the fallback when `BGFX_CAPS_RAY_TRACING` is absent.
 
 The RT *pipeline* stages already compile in shaderc (see `SLANG_ROADMAP` / the RT-stages
@@ -127,7 +127,7 @@ void setAccelerationStructure(uint8_t stage, AccelerationStructureHandle);
 
 ## 8. Cornell Box payoff
 
-Add a ray-query variant of `examples/52-cornellbox/cs_cornellbox.slang` (trace `scene` via
+Add a ray-query variant of `examples/54-cornellbox/cs_cornellbox.slang` (trace `scene` via
 `RayQuery` instead of the analytic intersector); the app builds a BLAS+TLAS for the box
 geometry and selects the path on `getCaps()->supported & BGFX_CAPS_RAY_TRACING`, falling
 back to the analytic compute shader otherwise.
@@ -153,7 +153,7 @@ back to the analytic compute shader otherwise.
   agreement with Metal at mean |delta| 0.12/255); a run on real `VK_KHR_ray_query`
   hardware remains a nice-to-have for performance and driver-diversity coverage.
 - Path-traced global illumination in the example (colour bleeding) -- done, along with
-  SVGF denoising and ReSTIR DI (see `examples/52-cornellbox`).
+  SVGF denoising and ReSTIR DI (see `examples/54-cornellbox`).
 - Generalized API -- done: `createTlas` takes multiple BLAS instances with per-instance
   transforms (`updateTlas`); `createBlas` takes multiple geometries and supports in-place
   refit (`updateBlas`) after e.g. compute-shader deformation of the source vertex buffers.
