@@ -52,18 +52,31 @@ jobs:
       # M0 (RT_WINDOWS_ROADMAP.md): exercise the Slang front-end on Windows. shaderc
       # dlopens slang.dll from beside its own executable (the Windows analog of the osx
       # job's libslang.dylib copy), so vendor it there, then run the SPIR-V compliance
-      # subset. TODO(M0): pin the Slang version to the vendored headers'
-      # SLANG_VERSION_NUMERIC and, long-term, use the fork's own Windows slang.dll build.
+      # subset.
+      #
+      # Copy the whole bin/, not just slang.dll: on Windows slang.dll is only a proxy
+      # whose exports are *forwarded* to slang-compiler.dll (slang's own
+      # source/slang/CMakeLists.txt, "Windows proxy DLL for backward compatibility").
+      # Forwarded exports do not resolve at load time, so shipping slang.dll alone gives
+      # a LoadLibrary that succeeds and a GetProcAddress that fails --
+      # "Symbol 'slang_createGlobalSession' not found in Slang library".
+      #
+      # The version comes from the vendored headers rather than a literal, because
+      # checkSlangVersion() rejects any skew between the two.
+      # TODO(M0): long-term, use the fork's own Windows slang.dll build.
       - name: Slang compliance (SPIR-V)
         if: matrix.config == 'Release'
         shell: pwsh
         run: |
           cd bgfx
-          $ver = "2026.12.2"
+          $hdr = Get-Content 3rdparty/slang/include/slang-tag-version.h -Raw
+          if ($hdr -notmatch 'SLANG_VERSION_NUMERIC "([^"]+)"') { throw "no SLANG_VERSION_NUMERIC in slang-tag-version.h" }
+          $ver = $Matches[1]
+          echo "Slang version from vendored headers: $ver"
           $url = "https://github.com/shader-slang/slang/releases/download/v$ver/slang-$ver-windows-x86_64.zip"
           Invoke-WebRequest -Uri $url -OutFile slang.zip
           Expand-Archive slang.zip -DestinationPath slang-dist -Force
-          Copy-Item slang-dist/bin/slang.dll ".build/${{ matrix.bindir }}/bin/slang.dll"
+          Copy-Item slang-dist/bin/*.dll ".build/${{ matrix.bindir }}/bin/"
           python tools/shaderc/slang-compliance/run.py `
             --shaderc ".build/${{ matrix.bindir }}/bin/shaderc${{ matrix.config }}.exe" `
             --target spirv
