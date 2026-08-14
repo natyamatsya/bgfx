@@ -985,7 +985,7 @@ namespace bgfx
 			bindShifts[ii].value.intValue0 = shifts[ii].kind;
 			bindShifts[ii].value.intValue1 = shifts[ii].shift;
 		}
-		slang::CompilerOptionEntry metalRtOptions[2] = {};
+		slang::CompilerOptionEntry metalRtOptions[3] = {};
 		if (ShadingLang::Metal == _targetLang && _nativeMetalRT)
 		{
 			// The runtime contract's cross-module ABI flags (R2): the slot-addressed
@@ -996,6 +996,15 @@ namespace bgfx
 			metalRtOptions[1].name = slang::CompilerOptionName::DisableWarning;
 			metalRtOptions[1].value.kind = slang::CompilerOptionValueKind::String;
 			metalRtOptions[1].value.stringValue0 = "39029";
+			// Force the intersection-function-table form of traversal. Slang decides
+			// between the two `_slang_rtTrace` overloads from what a *module* contains,
+			// but bgfx compiles one stage per module: a closest-hit never sees the
+			// any-hit of its own hit group and would otherwise lower TraceRay to
+			// `i.intersect(r, scene, mask)` -- no table, so the any-hit can never run.
+			// Forcing it makes the choice uniform across every stage of a program,
+			// which is also what the cross-module ABI requires.
+			metalRtOptions[2].name = slang::CompilerOptionName::MetalRTForceIsectTable;
+			metalRtOptions[2].value.intValue0 = 1;
 			sd.compilerOptionEntries    = metalRtOptions;
 			sd.compilerOptionEntryCount = BX_COUNTOF(metalRtOptions);
 		}
