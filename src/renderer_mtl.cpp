@@ -1631,15 +1631,23 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			// Intersection functions get their own table, indexed the way a geometry's
 			// intersectionFunctionTableOffset indexes it (createBlas pins that to 0, so
 			// today only hit group 0's any-hit is reachable).
-			if (numIsectFns > 0)
+			//
+			// Built even when no hit group has an any-hit: shaderc compiles RT stages with
+			// MetalRTForceIsectTable, so every raygen declares slang_rtIsect and would
+			// otherwise read an unbound argument. Entries for hit groups without an
+			// any-hit stay nil, which is exactly "no intersection function".
+			if (_numHitGroups > 0)
 			{
 				MTL::IntersectionFunctionTableDescriptor* itd = MTL::IntersectionFunctionTableDescriptor::alloc()->init();
-				itd->setFunctionCount(numIsectFns);
+				itd->setFunctionCount(_numHitGroups);
 				program.m_ift = cps->newIntersectionFunctionTable(itd);
 				itd->release();
-				for (uint16_t ii = 0; ii < numIsectFns; ++ii)
+				for (uint16_t ii = 0, fn = 0; ii < _numHitGroups; ++ii)
 				{
-					program.m_ift->setFunction(cps->functionHandle( (MTL::Function*)isectFns[ii]), ii);
+					if (NULL != program.m_rtAnyHit[ii])
+					{
+						program.m_ift->setFunction(cps->functionHandle( (MTL::Function*)isectFns[fn++]), ii);
+					}
 				}
 			}
 
