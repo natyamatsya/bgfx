@@ -34,39 +34,41 @@ denoised real-time path tracing:
    ray-query stage by `tools/rt-validation/rt_pipeline_cornellbox`: bit-exact on Vulkan
    (RTX 4090 and lavapipe), and within ~80 edge pixels of 65536 on D3D12, where `RayQuery`
    and `TraceRay` tie-break grazing rays differently — deterministically, since an RTX 4090
-   and WARP produce identical output. On Metal the stage passes too (12 big diffs of 65536,
-   budget 16), but the any-hit stage is **inert** there. Substituting an any-hit that
-   rejects *every* occluder — which should erase every shadow from the RT-pipeline path —
-   changes nothing in the Metal output, which is how that was established.
+   and WARP produce identical output. On Metal the stage passes at 12 big diffs of 65536
+   (budget 16), and the any-hit stage runs there too, on all three backends now.
 
-   `renderer_mtl` now builds and binds the intersection function table (it used to
-   `BX_UNUSED` `_anyHit` entirely), so the runtime half is in place, but two blockers
-   remain and both are outside it:
+   Metal any-hit needed two things, one on each side of the compiler boundary:
 
-   - **Compiler, separate compilation.** The Slang Metal backend emits two
-     `_slang_rtTrace` overloads, one taking an `intersection_function_table` and one not.
-     A stage compiled on its own cannot know that some hit group has an any-hit, so the
-     closest-hit module lowers its `TraceRay` to the table-less overload — the emitted
-     call is `_slang_rtTrace(ctx, scene, 255U, 14U)`, reaching `i.intersect(r, scene, mask)`
-     with no table. The ray flags survive; the table argument never appears. This is the
-     separate-compilation caveat noted in `tools/rt-validation/metal_rt_pipeline_p1.cpp`,
-     and it needs a compile-time signal that the pipeline has intersection functions.
-   - **Opaque geometry.** `createBlas` builds every geometry opaque, which inline ray
-     query depends on to auto-commit hits, and an any-hit only runs against non-opaque
-     geometry. Flipping it wholesale is not the answer: with `setOpaque(false)` the
-     ray-query stages lose their hits entirely (the referee jumps to ~185k differing
-     bytes), so opacity has to become a per-geometry choice in the AS API.
+   - `renderer_mtl`'s `createRtProgram` used to `BX_UNUSED` `_anyHit`. It now links any-hit
+     stages, builds an `MTL::IntersectionFunctionTable` from them, publishes the table in
+     the `slang_RTGlobals` header and binds it at buffer 27.
+   - `shaderc` compiles Metal RT stages with `MetalRTForceIsectTable`. Slang emits two
+     `_slang_rtTrace` overloads, with and without an `intersection_function_table`, and
+     picks between them from what a *module* contains — but bgfx compiles one stage per
+     module, so a closest-hit never sees its own hit group's any-hit and lowered `TraceRay`
+     to the table-less overload. Forcing it makes the choice uniform across a program,
+     which the cross-module ABI requires anyway.
 
-   The Metal binary is built and shipped regardless, so the stage set matches the other
-   backends and the fix takes effect once those two land.
+   Geometry opacity turned out **not** to be the obstacle it looks like. `createBlas` builds
+   every geometry opaque (inline ray query needs that to auto-commit hits), but the shadow
+   ray's `RAY_FLAG_FORCE_NON_OPAQUE` becomes `force_opacity(non_opaque)` on the intersector,
+   which overrides the geometry flag per-ray — so no per-geometry opacity API is needed.
+   Flipping the geometry itself would in fact be wrong: with `setOpaque(false)` the
+   ray-query stages stop committing hits and the referee jumps to ~185k differing bytes.
 
-   Metal's agreement is therefore held up by the shadow ray's `TMax = dist - kShadowBias`
-   alone, not by the any-hit stage. It is one epsilon from the artifact D3D12 had:
-   retracing with `TMax = dist` takes the stage from 12 big diffs to 17349, and with
-   `TMax = dist + 1.0` to 118293. So the emitter *is* reachable on Metal — the endpoint
-   bias is all that keeps the light's own quad out of the traversal, and unlike the other
-   backends there is no any-hit behind it. Changing `kShadowBias`, the light geometry or
-   the scene scale would surface it on Metal with nothing to suppress it.
+   That the stage genuinely runs is checked by substitution rather than inferred: an any-hit
+   that calls `IgnoreHit()` unconditionally, which must erase every shadow from the
+   RT-pipeline path, moves the referee from 12 big diffs to 12036. Before the two changes
+   above it moved nothing at all.
+
+   Metal's 12 residual diffs are not the emitter-shadowing artifact — it never had one, and
+   its count is unchanged by the any-hit either way. The emitter is nonetheless well within
+   reach there: retracing with the shadow ray's `TMax = dist` instead of
+   `dist - kShadowBias` takes the stage from 12 big diffs to 17349, and `TMax = dist + 1.0`
+   to 118293. What differs between backends is only *where* an emitter hit registers
+   relative to the endpoint — inside `dist - bias` on D3D12, at or past it on Metal. Both
+   now have the any-hit behind them, so a change to `kShadowBias`, the light geometry or
+   the scene scale no longer leaves Metal uniquely exposed.
 
 Two rendering paths share the scene and all three stages (the estimator: next-event
 estimation toward the ceiling area light + cosine-weighted diffuse bounces), selected at
