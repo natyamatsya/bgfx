@@ -34,7 +34,21 @@ denoised real-time path tracing:
    ray-query stage by `tools/rt-validation/rt_pipeline_cornellbox`: bit-exact on Vulkan
    (RTX 4090 and lavapipe), and within ~80 edge pixels of 65536 on D3D12, where `RayQuery`
    and `TraceRay` tie-break grazing rays differently — deterministically, since an RTX 4090
-   and WARP produce identical output.
+   and WARP produce identical output. On Metal the stage passes too (12 big diffs of 65536,
+   budget 16), but the any-hit stage is **inert** there: `renderer_mtl.cpp`'s
+   `createRtProgram` takes `_anyHit` and `BX_UNUSED`s it, so Metal builds no
+   intersection-function table. Substituting an any-hit that rejects *every* occluder
+   changes nothing in the Metal output, which is how that was established. The Metal
+   binary is built and shipped anyway so the stage set matches the other backends and
+   works the day the backend wires it up.
+
+   Metal's agreement is therefore held up by the shadow ray's `TMax = dist - kShadowBias`
+   alone, not by the any-hit stage. It is one epsilon from the artifact D3D12 had:
+   retracing with `TMax = dist` takes the stage from 12 big diffs to 17349, and with
+   `TMax = dist + 1.0` to 118293. So the emitter *is* reachable on Metal — the endpoint
+   bias is all that keeps the light's own quad out of the traversal, and unlike the other
+   backends there is no any-hit behind it. Changing `kShadowBias`, the light geometry or
+   the scene scale would surface it on Metal with nothing to suppress it.
 
 Two rendering paths share the scene and all three stages (the estimator: next-event
 estimation toward the ceiling area light + cosine-weighted diffuse bounces), selected at
@@ -76,9 +90,8 @@ trace through the bgfx acceleration-structure runtime.
   ray generation, closest hit, radiance miss (index 0), shadow miss (index 1) and the
   any-hit that stops emitters from shadowing. These have no `shader.mk` rule — the
   makefile only globs `vs_`/`fs_`/`cs_`, so they are compiled explicitly (stage from each
-  shader's `[shader(...)]` attribute; `-p spirv` for Vulkan, `-p s_6_5` for DXIL).
-  **`rt_cornellbox_ahit` has no Metal binary yet and `rt_cornellbox_chit` changed when
-  any-hit was added** — both need a regeneration pass on macOS before stage 5 runs there.
+  shader's `[shader(...)]` attribute; `-p spirv` for Vulkan, `-p s_6_5` for DXIL,
+  `-p metal --platform osx` for Metal).
 - `vs_cornellbox.slang` / `fs_cornellbox.slang` — a fullscreen quad that presents the image.
 - `cornellbox.cpp` — the app: builds the meshes + BLAS/TLAS when `BGFX_CAPS_RAY_TRACING`
   is present, drives the accumulation/rotation state, dispatches whichever tracer applies.
