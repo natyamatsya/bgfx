@@ -325,7 +325,10 @@ public:
 				};
 				bgfx::ShaderHandle rayGen = loadShader("rt_cornellbox_rg");
 				bgfx::ShaderHandle chit   = loadShader("rt_cornellbox_chit");
-				m_rtPipeProgram = bgfx::createRtProgram(rayGen, miss, 2, &chit, NULL, NULL, 1, NULL, 0, true);
+				// Any-hit rejects emissive occluders on the closest-hit stage's shadow ray,
+				// so emitters do not shadow -- matching the ray-query tracer's occluded().
+				bgfx::ShaderHandle ahit   = loadShader("rt_cornellbox_ahit");
+				m_rtPipeProgram = bgfx::createRtProgram(rayGen, miss, 2, &chit, &ahit, NULL, 1, NULL, 0, true);
 			}
 		}
 

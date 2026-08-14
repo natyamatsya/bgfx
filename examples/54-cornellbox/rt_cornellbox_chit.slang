@@ -2,8 +2,9 @@
 // shader -- the pattern the ray-tracing pipeline exists for. Reads the same per-triangle
 // material table as the ray-query tracer (instance*12 + primitive), rotates box-instance
 // normals by the payload's angle, and fires a shadow ray toward the light centre with
-// RAY_FLAG_SKIP_CLOSEST_HIT_SHADER (no recursion past depth 2; only the shadow miss runs).
-// The lighting model matches the "Simple RT" stage exactly.
+// RAY_FLAG_SKIP_CLOSEST_HIT_SHADER (no recursion past depth 2; only the shadow miss and
+// the any-hit stage run). The lighting model matches the "Simple RT" stage exactly, down
+// to emitters not occluding -- see rt_cornellbox_ahit.slang.
 import bgfx_shader;
 import bgfx_compute;
 import "cornellbox.sh";
@@ -55,8 +56,14 @@ void closestHitMain(inout RtPipePayload p, in BuiltInTriangleIntersectionAttribu
 
 		RtShadowPayload sp;
 		sp.lit = 0.0;
+		// FORCE_NON_OPAQUE so the any-hit stage runs: bgfx builds BLAS geometry opaque,
+		// which would otherwise skip it. Any-hit rejects emissive hits, matching the
+		// ray-query tracer's occluded() -- without it the light's own quad shadows the
+		// surfaces around it. ACCEPT_FIRST_HIT still ends the search on the first hit
+		// any-hit accepts, so this stays a cheap boolean visibility ray.
 		TraceRay(scene
 			, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER
+			| RAY_FLAG_FORCE_NON_OPAQUE
 			, 0xff, 0, 0, 1, rd, sp);
 
 		color += albedo * kLightEmission * (ndotl / (dist*dist) ) * 0.15 * sp.lit;

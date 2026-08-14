@@ -28,9 +28,13 @@ denoised real-time path tracing:
    win is modest (cleaner soft shadows); the algorithm is the point — with many lights it
    becomes decisive.
 5. **RT pipeline (hit shaders)** — the stage-1 image computed through the ray-tracing
-   *pipeline*: per-material shading in a closest-hit shader, shadow ray to miss index 1,
-   the rotation angle passed via the ray payload. Vulkan-only (`BGFX_CAPS_RAY_TRACING_PIPELINE`);
-   verified bit-exact against the ray-query stage on lavapipe.
+   *pipeline*: per-material shading in a closest-hit shader, shadow ray to miss index 1
+   with an any-hit stage that lets the shadow ray pass through emitters, the rotation angle
+   passed via the ray payload. Needs `BGFX_CAPS_RAY_TRACING_PIPELINE`. Verified against the
+   ray-query stage by `tools/rt-validation/rt_pipeline_cornellbox`: bit-exact on Vulkan
+   (RTX 4090 and lavapipe), and within ~80 edge pixels of 65536 on D3D12, where `RayQuery`
+   and `TraceRay` tie-break grazing rays differently — deterministically, since an RTX 4090
+   and WARP produce identical output.
 
 Two rendering paths share the scene and all three stages (the estimator: next-event
 estimation toward the ceiling area light + cosine-weighted diffuse bounces), selected at
@@ -68,6 +72,13 @@ trace through the bgfx acceleration-structure runtime.
 - `cs_cornellbox_temporal.slang` — the temporal reprojection pass (backend-independent).
 - `cs_cornellbox_atrous.slang` — the edge-aware à-trous filter pass (backend-independent:
   it denoises the output of either tracer).
+- `rt_cornellbox_{rg,chit,miss,shadow,ahit}.slang` — the RT-pipeline stage (stage 5):
+  ray generation, closest hit, radiance miss (index 0), shadow miss (index 1) and the
+  any-hit that stops emitters from shadowing. These have no `shader.mk` rule — the
+  makefile only globs `vs_`/`fs_`/`cs_`, so they are compiled explicitly (stage from each
+  shader's `[shader(...)]` attribute; `-p spirv` for Vulkan, `-p s_6_5` for DXIL).
+  **`rt_cornellbox_ahit` has no Metal binary yet and `rt_cornellbox_chit` changed when
+  any-hit was added** — both need a regeneration pass on macOS before stage 5 runs there.
 - `vs_cornellbox.slang` / `fs_cornellbox.slang` — a fullscreen quad that presents the image.
 - `cornellbox.cpp` — the app: builds the meshes + BLAS/TLAS when `BGFX_CAPS_RAY_TRACING`
   is present, drives the accumulation/rotation state, dispatches whichever tracer applies.
