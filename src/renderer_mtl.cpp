@@ -1454,9 +1454,16 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 
 		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, const ShaderHandle* _intersection, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) override
 		{
-			// v1 scope: miss + triangle closest-hit groups (the Slang Metal backend's
-			// P0-P4 feature set minus intersection-function tables in bgfx envelopes).
-			BX_UNUSED(_anyHit, _intersection, _callable, _numCallables);
+			// v1 scope: miss + triangle closest-hit groups, plus any-hit through an
+			// intersection function table (metal_rt_pipeline_p1's contract). Procedural
+			// intersection stages and callables are still out of scope.
+			//
+			// NOTE: an any-hit only *runs* against non-opaque geometry, and createBlas
+			// still builds every geometry opaque (inline ray query depends on that to
+			// auto-commit hits). So the table below is bound and correct, but no any-hit
+			// fires until geometry opacity becomes a per-geometry choice in the
+			// acceleration-structure API. See examples/54-cornellbox/README.md.
+			BX_UNUSED(_intersection, _callable, _numCallables);
 
 			ProgramMtl& program = m_program[_handle.idx];
 			const ShaderMtl& rayGen = m_shaders[_rayGen.idx];
@@ -1470,19 +1477,31 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			// loudly at creation instead of corrupting GPU state.
 			{
 				const ShaderMtl::RTAbi& ref = rayGen.m_rtAbi;
-				for (uint16_t ii = 0; ref.m_valid && ii < uint16_t(_numMiss + _numHitGroups); ++ii)
+				for (uint16_t ii = 0; ref.m_valid && ii < uint16_t(_numMiss + 2*_numHitGroups); ++ii)
 				{
-					const ShaderHandle handle = ii < _numMiss ? _miss[ii] : _closestHit[ii - _numMiss];
+					ShaderHandle handle;
+					if (ii < _numMiss)                          { handle = _miss[ii]; }
+					else if (ii < uint16_t(_numMiss + _numHitGroups) ) { handle = _closestHit[ii - _numMiss]; }
+					else                                        { handle = _anyHit[ii - _numMiss - _numHitGroups]; }
+
+					if (!isValid(handle) )
+					{
+						continue; // hit group without an any-hit stage
+					}
+
 					const ShaderMtl::RTAbi& abi = m_shaders[handle.idx].m_rtAbi;
 					if (!abi.m_valid)
 					{
 						continue; // pre-contract module; nothing to verify against
 					}
+					// "isect" is deliberately not compared: unlike payload/attr/ws/slots it
+					// is not a cross-module contract but a per-module property -- 1 marks
+					// the module as an intersection function, so an any-hit legitimately
+					// reports 1 against a raygen's 0. It is checked per stage below.
 					BGFX_FATAL(true
 						&& ref.m_payload == abi.m_payload
 						&& ref.m_attr    == abi.m_attr
 						&& ref.m_ws      == abi.m_ws
-						&& ref.m_isect   == abi.m_isect
 						&& ref.m_slots   == abi.m_slots
 						, Fatal::UnableToInitialize
 						, "Ray-tracing ABI mismatch between stage modules: raygen shader %d {payload %d, attr %d, ws %d, isect %d, slots %d} vs stage shader %d {payload %d, attr %d, ws %d, isect %d, slots %d}. Compile every stage of one program with the same -metal-rt-* flag set."
@@ -1506,8 +1525,36 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				fns[numFns++] = program.m_rtHit[ii]->m_function;
 			}
 
+			// Any-hit stages are intersection functions: linked into the pipeline like the
+			// rest, but addressed through m_ift by the geometry's intersection-function-
+			// table offset, so they must stay out of the SBT record numbering above.
+			const NS::Object* isectFns[BX_COUNTOF(program.m_rtAnyHit)];
+			uint16_t numIsectFns = 0;
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
+			{
+				if (isValid(_anyHit[ii]) )
+				{
+					const ShaderMtl& ah = m_shaders[_anyHit[ii].idx];
+					// "isect":1 marks a module the compiler emitted as an intersection
+					// function. Anything else cannot go in the table -- it would link but
+					// never be callable through it.
+					BGFX_FATAL(!ah.m_rtAbi.m_valid || 1 == ah.m_rtAbi.m_isect
+						, Fatal::UnableToInitialize
+						, "Shader %d passed as the any-hit of hit group %d is not an intersection function (RT ABI descriptor isect=%d, expected 1)."
+						, _anyHit[ii].idx, ii, ah.m_rtAbi.m_isect
+						);
+
+					program.m_rtAnyHit[ii] = &ah;
+					isectFns[numIsectFns++] = ah.m_function;
+				}
+			}
+
+			const NS::Object* linkFns[BX_COUNTOF(fns) + BX_COUNTOF(isectFns)];
+			bx::memCopy(linkFns,          fns,      sizeof(void*)*numFns);
+			bx::memCopy(linkFns + numFns, isectFns, sizeof(void*)*numIsectFns);
+
 			MTL::LinkedFunctions* linked = MTL::LinkedFunctions::alloc()->init();
-			linked->setFunctions(NS::Array::array(fns, numFns) );
+			linked->setFunctions(NS::Array::array(linkFns, numFns + numIsectFns) );
 
 			MTL::ComputePipelineDescriptor* pd = MTL::ComputePipelineDescriptor::alloc()->init();
 			pd->setComputeFunction(rayGen.m_function);
@@ -1581,6 +1628,21 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				program.m_vft->setFunction(cps->functionHandle( (MTL::Function*)fns[ii]), ii);
 			}
 
+			// Intersection functions get their own table, indexed the way a geometry's
+			// intersectionFunctionTableOffset indexes it (createBlas pins that to 0, so
+			// today only hit group 0's any-hit is reachable).
+			if (numIsectFns > 0)
+			{
+				MTL::IntersectionFunctionTableDescriptor* itd = MTL::IntersectionFunctionTableDescriptor::alloc()->init();
+				itd->setFunctionCount(numIsectFns);
+				program.m_ift = cps->newIntersectionFunctionTable(itd);
+				itd->release();
+				for (uint16_t ii = 0; ii < numIsectFns; ++ii)
+				{
+					program.m_ift->setFunction(cps->functionHandle( (MTL::Function*)isectFns[ii]), ii);
+				}
+			}
+
 			program.m_instOffsets = m_device->newBuffer(sizeof(uint32_t)*BGFX_CONFIG_MAX_TLAS_INSTANCES, MTL::ResourceStorageModeShared);
 			bx::memSet(program.m_instOffsets->contents(), 0, sizeof(uint32_t)*BGFX_CONFIG_MAX_TLAS_INSTANCES);
 
@@ -1636,6 +1698,13 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			bx::memSet(g, 0, globalsSize);
 			const uint64_t vftId = program.m_vft->gpuResourceID()._impl;
 			bx::memCopy(g + 0, &vftId, 8);
+			if (NULL != program.m_ift)
+			{
+				// Header slot 1 (offset 8) is the intersector's function table; it stays
+				// zero when no hit group has an any-hit.
+				const uint64_t iftId = program.m_ift->gpuResourceID()._impl;
+				bx::memCopy(g + 8, &iftId, 8);
+			}
 			bx::memCopy(g + 16, sbt, 24);
 		}
 
@@ -3854,6 +3923,13 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			m_computeCommandEncoder->setBuffer(_program.m_sbtBuf, 0, 29);
 			m_computeCommandEncoder->setVisibleFunctionTable(_program.m_vft, 30);
 			m_computeCommandEncoder->useResource(_program.m_vft, MTL::ResourceUsageRead);
+			if (NULL != _program.m_ift)
+			{
+				// 27 = the RT ABI descriptor's sys.isect, the fixed companion of the
+				// globals/sbt/handlers slots hardcoded above.
+				m_computeCommandEncoder->setIntersectionFunctionTable(_program.m_ift, 27);
+				m_computeCommandEncoder->useResource(_program.m_ift, MTL::ResourceUsageRead);
+			}
 			m_computeCommandEncoder->useResource(_program.m_instOffsets, MTL::ResourceUsageRead);
 
 			m_computeCommandEncoder->dispatchThreads(
@@ -4625,7 +4701,8 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 	{
 		m_vsh = NULL;
 		m_fsh = NULL;
-	MTL_RELEASE_W(m_vft, 0);
+		MTL_RELEASE_W(m_vft, 0);
+		MTL_RELEASE_W(m_ift, 0);
 		MTL_RELEASE_W(m_sbtBuf, 0);
 		MTL_RELEASE_W(m_instOffsets, 0);
 		MTL_RELEASE_W(m_globalsBuf, 0);

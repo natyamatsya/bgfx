@@ -416,11 +416,16 @@ namespace bgfx { namespace mtl
 		// intersector; miss/closest-hit shaders are [[visible]] functions dispatched
 		// through m_vft; the software SBT and the slang_RTGlobals argument buffer
 		// implement the contract validated by tools/rt-validation/metal_rt_pipeline_p*.
+		// Any-hit stages are *not* SBT records: they are intersection functions, addressed
+		// by the geometry's intersectionFunctionTableOffset through m_ift, so they are
+		// linked into the pipeline but stay out of m_vft's record numbering.
 		const ShaderMtl* m_rtMiss[4] = {};
 		const ShaderMtl* m_rtHit[4] = {};
+		const ShaderMtl* m_rtAnyHit[4] = {};
 		uint8_t m_numRtMiss = 0;
 		uint8_t m_numRtHit = 0;
 		MTL::VisibleFunctionTable* m_vft = NULL;
+		MTL::IntersectionFunctionTable* m_ift = NULL; // NULL when no hit group has an any-hit
 		MTL::Buffer* m_sbtBuf = NULL;
 		MTL::Buffer* m_instOffsets = NULL;
 		MTL::Buffer* m_globalsBuf = NULL;
