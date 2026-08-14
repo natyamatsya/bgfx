@@ -1456,13 +1456,20 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		{
 			// v1 scope: miss + triangle closest-hit groups, plus any-hit through an
 			// intersection function table (metal_rt_pipeline_p1's contract). Procedural
-			// intersection stages and callables are still out of scope.
-			//
-			// NOTE: an any-hit only *runs* against non-opaque geometry, and createBlas
-			// still builds every geometry opaque (inline ray query depends on that to
-			// auto-commit hits). So the table below is bound and correct, but no any-hit
-			// fires until geometry opacity becomes a per-geometry choice in the
-			// acceleration-structure API. See examples/54-cornellbox/README.md.
+			// intersection stages and callables are still out of scope -- warn rather
+			// than drop them silently, since BGFX_CAPS_RAY_TRACING_PIPELINE does not
+			// distinguish the two feature sets and the shader would just never run.
+			for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
+			{
+				BX_WARN(!isValid(_intersection[ii])
+					, "Metal: procedural intersection stages are not implemented; the intersection shader of hit group %d is ignored."
+					, ii
+					);
+			}
+			BX_WARN(0 == _numCallables
+				, "Metal: callable shaders are not implemented; %d callable(s) ignored."
+				, _numCallables
+				);
 			BX_UNUSED(_intersection, _callable, _numCallables);
 
 			ProgramMtl& program = m_program[_handle.idx];
@@ -1511,8 +1518,10 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				}
 			}
 
-			// Linked stage functions.
-			const NS::Object* fns[8];
+			// Linked stage functions: miss shaders and closest-hit groups, both bounded by
+			// BGFX_CONFIG_MAX_RT_SHADER_GROUPS (what the API validates against), not by the
+			// 4 + 4 this used to assume.
+			const NS::Object* fns[2*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 			uint16_t numFns = 0;
 			for (uint16_t ii = 0; ii < _numMiss; ++ii)
 			{

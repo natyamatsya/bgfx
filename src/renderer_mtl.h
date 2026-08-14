@@ -419,9 +419,9 @@ namespace bgfx { namespace mtl
 		// Any-hit stages are *not* SBT records: they are intersection functions, addressed
 		// by the geometry's intersectionFunctionTableOffset through m_ift, so they are
 		// linked into the pipeline but stay out of m_vft's record numbering.
-		const ShaderMtl* m_rtMiss[4] = {};
-		const ShaderMtl* m_rtHit[4] = {};
-		const ShaderMtl* m_rtAnyHit[4] = {};
+		const ShaderMtl* m_rtMiss[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
+		const ShaderMtl* m_rtHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
+		const ShaderMtl* m_rtAnyHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
 		uint8_t m_numRtMiss = 0;
 		uint8_t m_numRtHit = 0;
 		MTL::VisibleFunctionTable* m_vft = NULL;
