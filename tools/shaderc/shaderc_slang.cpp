@@ -985,7 +985,7 @@ namespace bgfx
 			bindShifts[ii].value.intValue0 = shifts[ii].kind;
 			bindShifts[ii].value.intValue1 = shifts[ii].shift;
 		}
-		slang::CompilerOptionEntry metalRtOptions[3] = {};
+		slang::CompilerOptionEntry metalRtOptions[4] = {};
 		if (ShadingLang::Metal == _targetLang && _nativeMetalRT)
 		{
 			// The runtime contract's cross-module ABI flags (R2): the slot-addressed
@@ -1005,6 +1005,14 @@ namespace bgfx
 			// which is also what the cross-module ABI requires.
 			metalRtOptions[2].name = slang::CompilerOptionName::MetalRTForceIsectTable;
 			metalRtOptions[2].value.intValue0 = 1;
+			// Same reasoning for world-space data. Slang adds the transform parameters
+			// pay-for-use, per module, and the tag set has to match across the intersector
+			// and the function table -- so a stage that reads ObjectToWorld/WorldRayOrigin
+			// gets ws=1 while the raygen that never mentions them gets ws=0, and program
+			// creation fails the cross-module ABI check. Compiled one stage at a time,
+			// uniform is the only self-consistent choice.
+			metalRtOptions[3].name = slang::CompilerOptionName::MetalRTForceWorldSpaceData;
+			metalRtOptions[3].value.intValue0 = 1;
 			sd.compilerOptionEntries    = metalRtOptions;
 			sd.compilerOptionEntryCount = BX_COUNTOF(metalRtOptions);
 		}

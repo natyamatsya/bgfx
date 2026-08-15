@@ -1454,24 +1454,11 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 
 		void createRtProgram(ProgramHandle _handle, ShaderHandle _rayGen, const ShaderHandle* _miss, uint16_t _numMiss, const ShaderHandle* _closestHit, const ShaderHandle* _anyHit, const ShaderHandle* _intersection, uint16_t _numHitGroups, const ShaderHandle* _callable, uint16_t _numCallables) override
 		{
-			// v1 scope: miss + triangle closest-hit groups, plus any-hit through an
-			// intersection function table (metal_rt_pipeline_p1's contract). Procedural
-			// intersection stages and callables are still out of scope -- warn rather
-			// than drop them silently, since BGFX_CAPS_RAY_TRACING_PIPELINE does not
-			// distinguish the two feature sets and the shader would just never run.
-			for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
-			{
-				BX_WARN(!isValid(_intersection[ii])
-					, "Metal: procedural intersection stages are not implemented; the intersection shader of hit group %d is ignored."
-					, ii
-					);
-			}
-			BX_WARN(0 == _numCallables
-				, "Metal: callable shaders are not implemented; %d callable(s) ignored."
-				, _numCallables
-				);
-			BX_UNUSED(_intersection, _callable, _numCallables);
-
+			// The full stage set of metal_rt_pipeline_p0-p4's contract: miss, closest-hit,
+			// any-hit, procedural intersection and callables. Miss/closest-hit/callable are
+			// [[visible]] functions reached through m_vft by SBT record index; any-hit and
+			// intersection are [[intersection(...)]] functions reached through m_ift by the
+			// geometry's table offset.
 			ProgramMtl& program = m_program[_handle.idx];
 			const ShaderMtl& rayGen = m_shaders[_rayGen.idx];
 			program.m_vsh = &rayGen;
@@ -1484,16 +1471,21 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 			// loudly at creation instead of corrupting GPU state.
 			{
 				const ShaderMtl::RTAbi& ref = rayGen.m_rtAbi;
-				for (uint16_t ii = 0; ref.m_valid && ii < uint16_t(_numMiss + 2*_numHitGroups); ++ii)
+				const uint16_t numStages = uint16_t(_numMiss + 3*_numHitGroups + _numCallables);
+				for (uint16_t ii = 0; ref.m_valid && ii < numStages; ++ii)
 				{
+					// miss | closest-hit | any-hit | intersection | callable
+					uint16_t at = ii;
 					ShaderHandle handle;
-					if (ii < _numMiss)                          { handle = _miss[ii]; }
-					else if (ii < uint16_t(_numMiss + _numHitGroups) ) { handle = _closestHit[ii - _numMiss]; }
-					else                                        { handle = _anyHit[ii - _numMiss - _numHitGroups]; }
+					if      (at < _numMiss)      { handle = _miss[at]; }
+					else if ( (at -= _numMiss)      < _numHitGroups) { handle = _closestHit[at]; }
+					else if ( (at -= _numHitGroups) < _numHitGroups) { handle = _anyHit[at]; }
+					else if ( (at -= _numHitGroups) < _numHitGroups) { handle = _intersection[at]; }
+					else                                            { handle = _callable[at - _numHitGroups]; }
 
 					if (!isValid(handle) )
 					{
-						continue; // hit group without an any-hit stage
+						continue; // hit group without an any-hit or intersection stage
 					}
 
 					const ShaderMtl::RTAbi& abi = m_shaders[handle.idx].m_rtAbi;
@@ -1518,10 +1510,11 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				}
 			}
 
-			// Linked stage functions: miss shaders and closest-hit groups, both bounded by
-			// BGFX_CONFIG_MAX_RT_SHADER_GROUPS (what the API validates against), not by the
-			// 4 + 4 this used to assume.
-			const NS::Object* fns[2*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
+			// Linked stage functions, in SBT record order: miss shaders, then closest-hit
+			// groups, then callables -- the layout the software SBT below publishes as
+			// missBase / hitBase / callableBase, and the order m_vft must be built in for
+			// TraceRay and CallShader to resolve to the right record.
+			const NS::Object* fns[3*BGFX_CONFIG_MAX_RT_SHADER_GROUPS];
 			uint16_t numFns = 0;
 			for (uint16_t ii = 0; ii < _numMiss; ++ii)
 			{
@@ -1533,29 +1526,53 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				program.m_rtHit[ii] = &m_shaders[_closestHit[ii].idx];
 				fns[numFns++] = program.m_rtHit[ii]->m_function;
 			}
+			for (uint16_t ii = 0; ii < _numCallables; ++ii)
+			{
+				program.m_rtCallable[ii] = &m_shaders[_callable[ii].idx];
+				fns[numFns++] = program.m_rtCallable[ii]->m_function;
+			}
+			program.m_numRtCallable = uint8_t(_numCallables);
 
-			// Any-hit stages are intersection functions: linked into the pipeline like the
-			// rest, but addressed through m_ift by the geometry's intersection-function-
-			// table offset, so they must stay out of the SBT record numbering above.
+			// Any-hit and procedural intersection stages are Metal intersection functions:
+			// linked into the pipeline like the rest, but addressed through m_ift by the
+			// geometry's intersection-function-table offset rather than by an SBT record,
+			// so they stay out of the record numbering above.
+			//
+			// One table entry per hit group. A group's geometry is either triangles or
+			// bounding boxes, never both, so its entry is the any-hit or the intersection
+			// stage accordingly; a group carrying both can only publish one, and the
+			// geometry type decides which is reachable.
 			const NS::Object* isectFns[BX_COUNTOF(program.m_rtAnyHit)];
 			uint16_t numIsectFns = 0;
 			for (uint16_t ii = 0; ii < _numHitGroups; ++ii)
 			{
-				if (isValid(_anyHit[ii]) )
-				{
-					const ShaderMtl& ah = m_shaders[_anyHit[ii].idx];
-					// "isect":1 marks a module the compiler emitted as an intersection
-					// function. Anything else cannot go in the table -- it would link but
-					// never be callable through it.
-					BGFX_FATAL(!ah.m_rtAbi.m_valid || 1 == ah.m_rtAbi.m_isect
-						, Fatal::UnableToInitialize
-						, "Shader %d passed as the any-hit of hit group %d is not an intersection function (RT ABI descriptor isect=%d, expected 1)."
-						, _anyHit[ii].idx, ii, ah.m_rtAbi.m_isect
-						);
+				const bool hasAnyHit = isValid(_anyHit[ii]);
+				const bool hasIsect  = isValid(_intersection[ii]);
+				BX_WARN(!(hasAnyHit && hasIsect)
+					, "Metal: hit group %d has both an any-hit and an intersection stage; only the intersection stage is reachable through the function table."
+					, ii
+					);
 
-					program.m_rtAnyHit[ii] = &ah;
-					isectFns[numIsectFns++] = ah.m_function;
+				if (!hasAnyHit
+				&&  !hasIsect)
+				{
+					continue;
 				}
+
+				const ShaderHandle handle = hasIsect ? _intersection[ii] : _anyHit[ii];
+				const ShaderMtl& sh = m_shaders[handle.idx];
+				// "isect":1 marks a module the compiler emitted as an intersection
+				// function. Anything else cannot go in the table -- it would link but
+				// never be callable through it.
+				BGFX_FATAL(!sh.m_rtAbi.m_valid || 1 == sh.m_rtAbi.m_isect
+					, Fatal::UnableToInitialize
+					, "Shader %d passed as the %s of hit group %d is not an intersection function (RT ABI descriptor isect=%d, expected 1)."
+					, handle.idx, hasIsect ? "intersection" : "any-hit", ii, sh.m_rtAbi.m_isect
+					);
+
+				if (hasIsect) { program.m_rtIntersection[ii] = &sh; }
+				else          { program.m_rtAnyHit[ii]       = &sh; }
+				isectFns[numIsectFns++] = sh.m_function;
 			}
 
 			const NS::Object* linkFns[BX_COUNTOF(fns) + BX_COUNTOF(isectFns)];
@@ -1653,7 +1670,8 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				itd->release();
 				for (uint16_t ii = 0, fn = 0; ii < _numHitGroups; ++ii)
 				{
-					if (NULL != program.m_rtAnyHit[ii])
+					if (NULL != program.m_rtIntersection[ii]
+					||  NULL != program.m_rtAnyHit[ii])
 					{
 						program.m_ift->setFunction(cps->functionHandle( (MTL::Function*)isectFns[fn++]), ii);
 					}

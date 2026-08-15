@@ -1,7 +1,8 @@
 // Headless ray-tracing PIPELINE smoke test: build a triangle BLAS/TLAS, create a
 // raygen+miss+closesthit program (bgfx::createRtProgram), trace one ray per pixel with
 // bgfx::dispatch (ray-grid dimensions in rays), read back the image. Expect white (hit).
-// Skips cleanly (exit 0) where BGFX_CAPS_RAY_TRACING_PIPELINE is absent (e.g. Metal).
+// Skips cleanly (exit 0) where BGFX_CAPS_RAY_TRACING_PIPELINE is absent. All three phases
+// run on Vulkan, D3D12 and Metal; compile the stage shaders for the target in question.
 // Usage: rt_pipeline_smoke <rg> <miss> <miss2> <chit> <rg2> <ahit> <chit2> <callable> <isect> <chit3>
 #include <bgfx/bgfx.h>
 #include <cstdio>

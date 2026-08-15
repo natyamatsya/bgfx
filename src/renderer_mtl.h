@@ -422,8 +422,11 @@ namespace bgfx { namespace mtl
 		const ShaderMtl* m_rtMiss[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
 		const ShaderMtl* m_rtHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
 		const ShaderMtl* m_rtAnyHit[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
+		const ShaderMtl* m_rtIntersection[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
+		const ShaderMtl* m_rtCallable[BGFX_CONFIG_MAX_RT_SHADER_GROUPS] = {};
 		uint8_t m_numRtMiss = 0;
 		uint8_t m_numRtHit = 0;
+		uint8_t m_numRtCallable = 0;
 		MTL::VisibleFunctionTable* m_vft = NULL;
 		MTL::IntersectionFunctionTable* m_ift = NULL; // NULL when no hit group has an any-hit
 		MTL::Buffer* m_sbtBuf = NULL;
