@@ -171,8 +171,16 @@ back to the analytic compute shader otherwise.
   buffers (both backends) and a valid entry in `createRtProgram`'s intersection array
   makes that hit group procedural (Vulkan pipeline; Metal ray query would need
   bounding-box candidate handling in the shader). Remaining: deeper recursion. The
-  Metal RT-pipeline path is SPIKED — runtime model proven on-device via function tables
-  (see `METAL_RT_PIPELINE.md`); blocked on Slang Metal-target RT-stage codegen, not on
+  Metal RT-pipeline path is DONE for the whole stage set — raygen, miss, closest-hit,
+  any-hit, procedural intersection and callables all run on-device, verified by
+  `rt_pipeline_smoke` phases 1-3 on Metal. Miss/closest-hit/callable are `[[visible]]`
+  functions addressed by SBT record through a visible function table; any-hit and
+  intersection are `[[intersection(...)]]` functions addressed by the geometry's table
+  offset through an intersection function table (see `METAL_RT_PIPELINE.md`). Because bgfx
+  compiles one module per stage, `shaderc` pins the two cross-module ABI flags that Slang
+  would otherwise infer per module — `MetalRTForceIsectTable` and
+  `MetalRTForceWorldSpaceData` — since a stage cannot see what the rest of its program
+  contains. It was previously SPIKED and blocked on Slang Metal-target RT-stage codegen, not on
   which cannot come from SPIRV-Cross (no MSL for RT pipeline stages) and would instead
   map onto Metal intersection function tables, likely via Slang's native MSL backend.
 
