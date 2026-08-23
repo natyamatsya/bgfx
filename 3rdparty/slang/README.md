@@ -9,10 +9,10 @@ runtime (`bx::dlopen`), the same way it loads DXC (`dxcompiler`). The backend is
 
 ## Pinned version
 
-- **Base version:** `2026.14.1` (`SLANG_VERSION_NUMERIC`)
-- **Build:** `2026.14.1-73-gb3f2123d2` (`SLANG_TAG_VERSION`)
+- **Base version:** `2026.16` (`SLANG_VERSION_NUMERIC`)
+- **Build:** `2026.16-28-g1e1c5bad8` (`SLANG_TAG_VERSION`)
 - **Source:** the [`natyamatsya/slang`](https://github.com/natyamatsya/slang) fork, branch
-  `metal-rt-impl`, rebased onto upstream Slang `2026.14.1`. The headers come from that branch, not
+  `metal-rt-impl`, rebased onto upstream Slang `2026.16`. The headers come from that branch, not
   from an official release tarball, because the native Metal RT path needs the fork's compiler
   changes (the `MetalRT*` entries in `CompilerOptionName`).
 - **License:** Apache-2.0 WITH LLVM-exception (see `LICENSE`)
@@ -23,12 +23,14 @@ this: it has been `0` across both versions. The real hazard is that `CompilerOpt
 *value-assigned* enum, so upstream inserting options renumbers everything after them — `2026.14.1`
 added `SeparateDebugInfoOutput = 156` / `DebugInfoIncludeSource = 157`, which pushed the fork's
 options up by two (`MetalRTGlobalsSlots` went `159` → `161`). A mismatched pair therefore compiles
-and links fine and then silently applies the wrong options.
+and links fine and then silently applies the wrong options. The `2026.16` bump did *not* renumber --
+all four `MetalRT*` values are unchanged -- but that is luck, not a guarantee: check them on every
+bump, because nothing but this check stands between a renumber and silently wrong codegen.
 
 `shaderc` guards against this at runtime: `checkSlangVersion()` in `tools/shaderc/shaderc_slang.cpp`
 compares `IGlobalSession::getBuildTagString()` against `SLANG_VERSION_NUMERIC` from these headers and
 fails with a named-versions error on skew. Only the numeric version is compared, because a stock
-upstream release reports `2026.14.1` while the fork build reports `2026.14.1-73-gb3f2123d2` and both
+upstream release reports `2026.16` while the fork build reports `2026.16-28-g1e1c5bad8` and both
 are supported — see the platform note under *Vendored contents*.
 
 ## Vendored contents
@@ -37,7 +39,7 @@ are supported — see the platform note under *Vendored contents*.
   `slang.h`, `slang-com-ptr.h`, `slang-com-helper.h`, `slang-deprecated.h`,
   `slang-image-format-defs.h`, `slang-tag-version.h`.
 - `../../tools/bin/darwin/libslang.dylib` — the prebuilt `libslang-compiler` shared library from
-  the `2026.14.1-73-gb3f2123d2` fork build (macOS arm64), flattened to a single file. The whole
+  the `2026.16-28-g1e1c5bad8` fork build (macOS arm64), flattened to a single file. The whole
   `tools/bin/darwin/` directory is otherwise `*`-gitignored, so that one file is explicitly
   un-ignored (`!libslang.dylib`).
 
