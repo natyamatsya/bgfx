@@ -32,6 +32,8 @@ STAGES = [
 
 ACCEL_STRUCT_ID = 0x1000  # descriptorTypeToId(DescriptorType::AccelerationStructure)
 
+KNOWN_ENVELOPE_VERSIONS = {12}
+
 def parse_envelope(path):
     d = open(path, "rb").read()
     o = 0
@@ -43,6 +45,11 @@ def parse_envelope(path):
         nonlocal o; v = struct.unpack_from("<I", d, o)[0]; o += 4; return v
     magic = u32()
     r = {"magicChar": chr(magic & 0xff), "ver": (magic >> 24) & 0xff}
+    # See run.py: an envelope version this parser does not know must fail loudly rather
+    # than be read at the old offsets.
+    if r["ver"] not in KNOWN_ENVELOPE_VERSIONS:
+        sys.exit("%s: shader envelope version %d is not one this parser understands (%s); "
+                 "update parse_envelope() for the new layout." % (path, r["ver"], sorted(KNOWN_ENVELOPE_VERSIONS)))
     u32(); u32()                      # hashIn, hashOut (0 for RT)
     if r["ver"] >= 12:
         u32(); u32()                  # envelope v12: RawBindings (raw SRV/UAV masks)

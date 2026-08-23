@@ -33,6 +33,27 @@ TARGETS = {
 U = {0: "Sampler", 1: "End", 2: "Vec4", 3: "Mat3", 4: "Mat4"}
 DECOR = {4: "RowMajor", 5: "ColMajor", 7: "MatrixStride"}
 
+# The envelope layout is versioned. This suite is differential -- it compares the stock
+# .sc output against the Slang output -- so a layout change neither side knows about is
+# invisible: both are misparsed identically and still compare equal. That happened on the
+# v11 -> v12 bump (upstream added a RawBindings pair), which still reported 302/302 while
+# reading every field from the wrong offset. So pin the versions this parser understands
+# and refuse anything else, and check that a parse lands exactly on the end of the file.
+KNOWN_ENVELOPE_VERSIONS = {12}
+
+def check_shaderc_envelope_version(root):
+    """Fail if shaderc's envelope version has moved past what parse_envelope understands."""
+    hdr = os.path.join(root, "tools", "shaderc", "shaderc.h")
+    for line in open(hdr):
+        if line.startswith("#define BGFX_SHADER_BIN_VERSION"):
+            ver = int(line.split()[2])
+            if ver not in KNOWN_ENVELOPE_VERSIONS:
+                sys.exit("shaderc.h declares shader envelope version %d, but this suite only knows %s.\n"
+                         "Update parse_envelope() in run.py and rt_stages.py for the new layout."
+                         % (ver, sorted(KNOWN_ENVELOPE_VERSIONS)))
+            return ver
+    sys.exit("could not find BGFX_SHADER_BIN_VERSION in %s" % hdr)
+
 def parse_envelope(path, metal=False):
     d = open(path, "rb").read()
     o = 0
@@ -46,6 +67,9 @@ def parse_envelope(path, metal=False):
     magic = u32()
     r["magic"] = bytes([magic & 0xff, (magic >> 8) & 0xff, (magic >> 16) & 0xff]).decode("latin1")
     r["ver"] = (magic >> 24) & 0xff
+    if r["ver"] not in KNOWN_ENVELOPE_VERSIONS:
+        sys.exit("%s: shader envelope version %d is not one this parser understands (%s); "
+                 "update parse_envelope() for the new layout." % (path, r["ver"], sorted(KNOWN_ENVELOPE_VERSIONS)))
     r["hashIn"] = u32(); r["hashOut"] = u32()
     # Envelope v12 (upstream "Raw buffers") writes a RawBindings pair -- the raw SRV and
     # UAV masks, u32 each -- between the hashes and the uniform count. Written by
@@ -69,6 +93,12 @@ def parse_envelope(path, metal=False):
     r["attrs"] = sorted(u16() for _ in range(numAttr))   # compare as a set (location order differs by compiler)
     r["size"] = u16()
     r["matrix"] = matrix_decorations(spv)
+    # A correct parse consumes the envelope exactly. Anything left over (or an overrun,
+    # which raises above) means the layout moved and every field read here is suspect.
+    if o != len(d):
+        sys.exit("%s: parsed %d of %d bytes -- the envelope layout does not match this "
+                 "parser. Do not trust a PASS from a misparse; fix parse_envelope()."
+                 % (path, o, len(d)))
     return r
 
 def matrix_decorations(spv):
@@ -175,6 +205,7 @@ def main():
     targets = ["spirv", "metal"] if args.target == "both" else [args.target]
     shaderc = os.path.abspath(args.shaderc)
     root = os.path.abspath(args.bgfx_root)
+    check_shaderc_envelope_version(root)
     shaders_dir = os.path.join(here, "shaders")
 
     # Each Slang port maps to one or more stock .sc files. A combined port
