@@ -1199,7 +1199,37 @@ namespace bgfx
 		return structTl;
 	}
 
-	static void reflectUniforms(const SlangDll& _slang, SlangReflection* _reflect, slang::IBlob* _spirv, int32_t _uboBinding, bool _dxil, UniformArray& _uniforms, bx::WriterI* _messageWriter)
+	// Is the resource at this register live in the compiled entry point? This is the DXIL
+	// counterpart of the SPIR-V path's "is the binding present in the generated SPIR-V"
+	// test. IMetadata::isParameterLocationUsed is the native query for it, and the reason it
+	// is unusable on the Vulkan path -- -fvk-*-shift moves a binding out from under the
+	// reflection -- does not apply here: DXIL deliberately applies no shift, register()
+	// passes straight through (see the target setup above). A failed query counts as live,
+	// because dropping a uniform the shader does use is far worse than keeping a dead one.
+	static bool isLocationUsedDxil(slang::IMetadata* _metadata, SlangParameterCategory _category, uint32_t _register)
+	{
+		if (NULL == _metadata)
+		{
+			return true;
+		}
+
+		bool used = true;
+		return SLANG_FAILED(_metadata->isParameterLocationUsed(_category, 0, _register, used) )
+			|| used
+			;
+	}
+
+	// The b# register the loose-uniform cbuffer ($Globals) occupies, for the query above.
+	static uint32_t getGlobalParamsCbRegister(const SlangDll& _slang, SlangReflection* _reflect)
+	{
+		SlangReflectionVariableLayout* globalVar = _slang.Reflection_getGlobalParamsVarLayout(_reflect);
+		return (NULL == globalVar)
+			? 0
+			: (uint32_t)_slang.VariableLayout_GetOffset(globalVar, SLANG_PARAMETER_CATEGORY_CONSTANT_BUFFER)
+			;
+	}
+
+	static void reflectUniforms(const SlangDll& _slang, SlangReflection* _reflect, slang::IBlob* _spirv, int32_t _uboBinding, bool _dxil, slang::IMetadata* _metadata, UniformArray& _uniforms, bx::WriterI* _messageWriter)
 	{
 		SlangReflectionTypeLayout* structTl = getGlobalParamsStruct(_slang, _reflect);
 		if (NULL == structTl)
@@ -1212,9 +1242,11 @@ namespace bgfx
 		// once -fvk-*-shift is applied, so gate each field on the generated SPIR-V: an unused
 		// UBO or texture is dead-stripped from the entry point. Loose uniforms share the
 		// stage's UBO binding; each texture has its own (logical register + kSpirvBindShift).
-		// DXIL: there is no SPIR-V to strip dead globals against; the envelope keeps
-		// every declared global (liveness gating for DXIL is a follow-up).
-		const bool uboUsed = _dxil || spirvHasBinding(_spirv, (uint32_t)_uboBinding);
+		// DXIL has no SPIR-V to strip against, so it asks the compiler directly.
+		const bool uboUsed = _dxil
+			? isLocationUsedDxil(_metadata, SLANG_PARAMETER_CATEGORY_CONSTANT_BUFFER, getGlobalParamsCbRegister(_slang, _reflect) )
+			: spirvHasBinding(_spirv, (uint32_t)_uboBinding)
+			;
 
 		const unsigned fieldCount = _slang.TypeLayout_GetFieldCount(structTl);
 		for (unsigned ii = 0; ii < fieldCount; ++ii)
@@ -1249,10 +1281,16 @@ namespace bgfx
 					// declares, per the pass-through convention above.
 					SlangReflectionType* resType = _slang.TypeLayout_GetType(_slang.VariableLayout_GetTypeLayout(field) );
 					const bool uav = SLANG_RESOURCE_ACCESS_READ != _slang.Type_GetResourceAccess(resType);
-					binding = (uint32_t)_slang.VariableLayout_GetOffset(
-						  field
-						, uav ? SLANG_PARAMETER_CATEGORY_UNORDERED_ACCESS : SLANG_PARAMETER_CATEGORY_SHADER_RESOURCE
-						);
+					const SlangParameterCategory category = uav
+						? SLANG_PARAMETER_CATEGORY_UNORDERED_ACCESS
+						: SLANG_PARAMETER_CATEGORY_SHADER_RESOURCE
+						;
+					binding = (uint32_t)_slang.VariableLayout_GetOffset(field, category);
+
+					if (!isLocationUsedDxil(_metadata, category, binding) )
+					{
+						continue;
+					}
 				}
 				else
 				{
@@ -1267,13 +1305,23 @@ namespace bgfx
 				if (toSamplerUniform(_slang, field, un, _spirv, name) )
 				{
 					un.regIndex = uint16_t(binding);
-					if (isCompareSampler(_slang, structTl, name) )
+					// kUniformCompareBit is a SPIR-V/Metal-path convention: the stock HLSL
+					// front-end never sets it, and the D3D12 sampler branch does not read it
+					// (sampler state comes from the texture binding, not the shader).
+					if (!_dxil
+					&&  isCompareSampler(_slang, structTl, name) )
 					{
 						un.type = UniformType::Enum(un.type | kUniformCompareBit);
 					}
 					_uniforms.push_back(un);
 				}
-				else if (toStorageUniform(_slang, field, un, _spirv, name) )
+				// Storage images and buffers are listed in the uniform table on the
+				// SPIR-V/Metal paths and omitted by the stock HLSL one -- D3D12 binds a UAV
+				// from the bgfx binding slot, so an entry here is not just unnecessary, it is
+				// typed End with no sampler bit, which makes the runtime take it for a user
+				// uniform and warn that it cannot find it.
+				else if (!_dxil
+				&&       toStorageUniform(_slang, field, un, _spirv, name) )
 				{
 					un.regIndex = uint16_t(binding);
 					_uniforms.push_back(un);
@@ -1411,7 +1459,13 @@ namespace bgfx
 
 	// Collects the vertex-input attribute ids, ordered by SPIR-V input location so index N
 	// in the envelope corresponds to location N (which is what the renderers assume).
-	static void collectAttributes(const SlangDll& _slang, SlangReflectionEntryPoint* _epReflect, std::vector<uint16_t>& _attrIds)
+	// _dxil: the stock HLSL front-end emits only inputs that map to a bgfx attribute, while
+	// the GLSL/SPIR-V and Metal ones emit a UINT16_MAX placeholder for every other input --
+	// instance data (i_data0..4, i_light, carried on TEXCOORD semantics) and system values
+	// (SV_InstanceID). The runtime discards an unmapped id either way (idToAttrib returns
+	// Attrib::Count, which renderer_*.cpp skips), so this is purely which convention the
+	// envelope follows; follow the one the target's stock front-end does.
+	static void collectAttributes(const SlangDll& _slang, SlangReflectionEntryPoint* _epReflect, bool _dxil, std::vector<uint16_t>& _attrIds)
 	{
 		if (NULL == _epReflect)
 		{
@@ -1453,6 +1507,12 @@ namespace bgfx
 					;
 
 				uint32_t location = (uint32_t)_slang.VariableLayout_GetOffset(inField, SLANG_PARAMETER_CATEGORY_VARYING_INPUT);
+				if (_dxil
+				&&  bgfx::Attrib::Count == attr)
+				{
+					continue;
+				}
+
 				uint16_t id = bgfx::Attrib::Count != attr
 					? bgfx::attribToId(attr)
 					: uint16_t(UINT16_MAX)
@@ -1844,6 +1904,20 @@ namespace bgfx
 			return false;
 		}
 
+		// Entry-point metadata backs the DXIL liveness gate (see isLocationUsedDxil). It is
+		// only asked for on that path; the others strip dead globals against the SPIR-V. A
+		// failure is not fatal -- the gate then treats everything as live, which is the
+		// behaviour this replaces.
+		Slang::ComPtr<slang::IMetadata> metadata;
+		if (ShadingLang::Dxil == _targetLang)
+		{
+			Slang::ComPtr<slang::IBlob> metaDiagnostics;
+			if (SLANG_FAILED(linked->getEntryPointMetadata(0, 0, metadata.writeRef(), metaDiagnostics.writeRef() ) ) )
+			{
+				metadata = NULL;
+			}
+		}
+
 		UniformArray uniforms;
 		if (nativeMetalRT)
 		{
@@ -1851,13 +1925,13 @@ namespace bgfx
 		}
 		else
 		{
-			reflectUniforms(slang, layout, spirvBlob, uboBinding, ShadingLang::Dxil == _targetLang, uniforms, _messageWriter);
+			reflectUniforms(slang, layout, spirvBlob, uboBinding, ShadingLang::Dxil == _targetLang, metadata, uniforms, _messageWriter);
 		}
 
 		std::vector<uint16_t> attrIds;
 		if ('v' == _options.shaderType)
 		{
-			collectAttributes(slang, epReflect, attrIds);
+			collectAttributes(slang, epReflect, ShadingLang::Dxil == _targetLang, attrIds);
 		}
 
 		uint32_t inputHash  = 0;
