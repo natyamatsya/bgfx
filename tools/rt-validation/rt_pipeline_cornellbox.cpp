@@ -215,29 +215,94 @@ int main(int argc,char**argv){
 		snprintf(path,sizeof(path),"%s_rtp.ppm",dp); writePPM(path,b);
 	}
 
-	double sum=0; int mx=0; int big=0; int firstBig=-1;
-	for(size_t i=0;i<a.size();i++){int d=int(a[i])-int(b[i]); if(d<0)d=-d; sum+=d; if(d>mx)mx=d; if(d>8){big++; if(firstBig<0)firstBig=(int)i;}}
-	printf("ray-query vs rt-pipeline: mean|d|=%.3f max|d|=%d bigDiffs=%d (of %zu) first@px(%d,%d)\n", sum/a.size(), mx, big, a.size()/4, (firstBig/4)%kW, (firstBig/4)/kW);
-	// What this referee guards against is region-scale disagreement (a contract break),
-	// not watertightness noise, so the big-diff budget is per-backend.
+	// --- adjudicating the two traversal entry points ------------------------------------
 	//
-	// Vulkan compares bit-exact and keeps the strict bound -- measured mean 0.000 /
-	// max 1 / 0 big diffs on an RTX 4090, not just on lavapipe. On Metal, ray query
-	// (intersection_query) and the RT pipeline (intersector<>) are different API objects
-	// that may tie-break grazing edge rays differently, hence the same small allowance
-	// it has always had.
+	// What this referee is for: the ray-query tracer and the RT pipeline walk the same
+	// acceleration structure with the same rays and the same materials, so they must agree
+	// about the *scene*. A contract break -- a stage bound to the wrong slot, a material
+	// index computed differently, a missed hit group -- shows up as a region of the image
+	// changing, and that is what has to fail the test.
 	//
-	// D3D12 needs a wider bound: RayQuery (DXR 1.1) and TraceRay disagree on ~80 edge
-	// pixels of 65536 here, max|d| 113. That is deterministic rather than noise -- an
-	// RTX 4090 and WARP, a hardware and a software DXR implementation, produce byte-
-	// identical numbers -- so it is a spec-permitted difference between the two
-	// traversal entry points, not a bug in either shader. (Before the any-hit stage
-	// existed it was 353; emitters shadowing accounted for the rest. See
-	// examples/55-cornellbox/rt_cornellbox_ahit.slang.)
-	const bgfx::RendererType::Enum renderer = bgfx::getCaps()->rendererType;
-	const int bigBudget = bgfx::RendererType::Direct3D12 == renderer ? 256 : 16;
-	const bool pass = (sum/a.size()) < 1.0 && big <= bigBudget;
-	printf("backend=%s bigDiffs budget=%d\n", bgfx::getRendererName(renderer), bigBudget);
+	// Why equality is too strong a relation for that. The image is not a function of the
+	// scene alone: a few of its pixels are genuinely underdetermined, because the ray
+	// through them has more than one legal intersection and neither DXR nor Vulkan says
+	// which one an implementation must return. Here that is forced by the scene's own
+	// symmetry rather than being a remote possibility:
+	//
+	//   - the eye is on the box axis at (0,0,-3.8) and the walls are at +-1, so a ray hits
+	//     the ceiling/right-wall corner edge (the line x=1,y=1) exactly when dir.x == dir.y;
+	//   - primaryRay() computes uv as (px + 0.5)/256 * 2 - 1, and at 256 wide every one of
+	//     those steps is exact in binary32 -- px + 0.5 is exact, /256 and *2 are powers of
+	//     two, -1 is exact at that magnitude -- so uv.x == uv.y holds *bit-exactly* for the
+	//     whole diagonal x + y == 255, and with aspect 1 so does dir.x == dir.y;
+	//   - solving for where that edge is the first surface hit (x reaches 1 before z does,
+	//     and the edge is not behind the open front) gives 201 <= x <= 253, i.e. 53 rays
+	//     per corner that pass dead through it, and the same again mirrored through
+	//     floor/left-wall;
+	//   - the two walls are separate quad() calls with their own vertices, so this is not
+	//     even a shared edge of one mesh: the watertightness rules do not reach it, and an
+	//     implementation may legally return either triangle, at the same t.
+	//
+	// Measured on an RTX 4090: of the 53 such rays per corner the two paths choose the same
+	// triangle for 38 and differ on 15, scattered and non-contiguous -- the signature of a
+	// float edge function landing on +-0 for a mathematically-zero input. A real traversal
+	// error would differ on all 53. Away from those two diagonals all four images (D3D12 and
+	// Vulkan, ray query and pipeline) are byte-identical over the other 65408 pixels.
+	//
+	// So the comparison is lifted from equality to membership of a covering: for each pixel,
+	// the set of values any legal intersection could have produced. For an ordinary pixel
+	// that set is a single value and membership is just equality; for one of these corner
+	// rays it holds both abutting surfaces, and either answer passes.
+	//
+	// The covering is read off the image rather than recomputed: whichever of the two
+	// surfaces wins, the hit lies on their shared seam, so the result is that surface's
+	// shading there -- and its immediate neighbours along the seam are samples of exactly
+	// those two surfaces. The 3x3 neighbourhood (centre excluded) is therefore an estimate
+	// of the covering, good to one pixel of shading gradient, which kCovTol absorbs. It is
+	// also tight: legal corner resolutions land in it at distance 0, while a wrong material,
+	// a missed hit or a black pixel land 21..77 away.
+	//
+	// Both images are judged against the *same* covering, which is what keeps a region-scale
+	// break failing whichever of the two carries it: a wrongly shaded region covers its own
+	// values, but then the other image's value falls outside, and the pixel is unexplained.
+	// Nothing in the bar is per-backend, so unlike the big-diff budget this replaces there is
+	// nothing to re-tune when a driver resolves a degenerate ray the other way. It also keeps
+	// every pixel under test, which masking the two diagonals would not.
+	//
+	// The deliberate blind spot: a wrong result that happens to reproduce an abutting
+	// surface's shading, on a pixel already sitting on a seam, is accepted. That is one pixel
+	// wide and indistinguishable from a legal resolution by construction -- the price of not
+	// calling a conformant implementation broken.
+	const int kNoise  = 8; // per-channel byte noise, as before: below this there is nothing to adjudicate
+	const int kCovTol = 2; // one pixel of shading gradient between a seam pixel and its neighbours
+
+	auto rgbAt=[&](const std::vector<uint8_t>& I,int x,int y){ return &I[(size_t(y)*kW+x)*4]; };
+	auto dist=[](const uint8_t* p,const uint8_t* q){ int m=0; for(int c=0;c<3;c++){int d=int(p[c])-int(q[c]); if(d<0)d=-d; if(d>m)m=d;} return m; };
+	// Is this value one the pixel's covering allows? The covering is estimated by the
+	// surfaces visible immediately around the pixel, the pixel itself excluded.
+	auto covered=[&](const uint8_t* v,int x,int y){
+		for(int j=y-1;j<=y+1;j++)for(int i=x-1;i<=x+1;i++){
+			if((i==x&&j==y)||i<0||j<0||i>=int(kW)||j>=int(kH))continue;
+			if(dist(v,rgbAt(a,i,j))<=kCovTol)return true;
+		}
+		return false;
+	};
+
+	double sum=0; int mx=0; int disagree=0; int unexplained=0; int firstBad=-1;
+	for(uint32_t pi=0;pi<kW*kH;pi++){
+		const int x=int(pi%kW), y=int(pi/kW);
+		const uint8_t* pa=rgbAt(a,x,y); const uint8_t* pb=rgbAt(b,x,y);
+		for(int c=0;c<3;c++){int d=int(pa[c])-int(pb[c]); if(d<0)d=-d; sum+=d;}
+		const int d=dist(pa,pb); if(d>mx)mx=d;
+		if(d<=kNoise)continue;
+		++disagree;
+		if(!covered(pa,x,y)||!covered(pb,x,y)){++unexplained; if(firstBad<0)firstBad=int(pi);}
+	}
+	const double mean=sum/(double(kW)*kH*3);
+	printf("ray-query vs rt-pipeline: mean|d|=%.3f max|d|=%d disagreeing px=%d of %u, unexplained=%d\n", mean, mx, disagree, kW*kH, unexplained);
+	if(firstBad>=0)printf("first unexplained px(%d,%d)\n", firstBad%int(kW), firstBad/int(kW));
+	const bool pass = mean < 1.0 && 0 == unexplained;
+	printf("backend=%s\n", bgfx::getRendererName(bgfx::getCaps()->rendererType) );
 	printf(pass?"RESULT: PASS (pipelines agree)\n":"RESULT: FAIL\n");
 	bgfx::shutdown();
 	return pass?0:3;
