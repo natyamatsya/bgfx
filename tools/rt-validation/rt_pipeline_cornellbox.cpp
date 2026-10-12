@@ -118,13 +118,13 @@ static void updateXf(bgfx::AccelerationStructureHandle tlas, float angle)
 	bgfx::updateTlas(tlas, bgfx::copy(xf,sizeof(xf)));
 }
 
-static void readbackPPM(const char* path)
+// Writes an already-read RGBA8 frame as a PPM. Env-gated by BGFX_RT_DUMP (see main):
+// when the referee reports a disagreement, the two images are what tell you which path
+// moved, so dumping them has to be reachable without an edit-rebuild cycle.
+static void writePPM(const char* path, const std::vector<uint8_t>& px)
 {
-	bgfx::blit(7, { .handle = g_rb }, { .handle = g_target });
-	std::vector<uint8_t> px(kW*kH*4,0);
-	uint32_t fa = bgfx::read({ .handle = g_rb }, px.data());
-	uint32_t fr = 0; while (fr < fa) fr = bgfx::frame();
-	FILE*o=fopen(path,"wb"); fprintf(o,"P6\n%u %u\n255\n",kW,kH);
+	FILE*o=fopen(path,"wb"); if(NULL==o){printf("cannot write %s\n",path);return;}
+	fprintf(o,"P6\n%u %u\n255\n",kW,kH);
 	for(uint32_t i=0;i<kW*kH;i++){uint8_t rgb[3]={px[i*4],px[i*4+1],px[i*4+2]};fwrite(rgb,1,3,o);}
 	fclose(o); printf("wrote %s\n",path);
 }
@@ -207,6 +207,13 @@ int main(int argc,char**argv){
 	bgfx::setBuffer(3,g_mbh,bgfx::Access::Read);
 	bgfx::dispatch(0,rtp,kW,kH,1);
 	std::vector<uint8_t> b(kW*kH*4,0); readback(b);
+
+	// BGFX_RT_DUMP=<prefix> writes <prefix>_rq.ppm (path A) and <prefix>_rtp.ppm (path B).
+	if(const char*dp=getenv("BGFX_RT_DUMP")){
+		char path[512];
+		snprintf(path,sizeof(path),"%s_rq.ppm",dp);  writePPM(path,a);
+		snprintf(path,sizeof(path),"%s_rtp.ppm",dp); writePPM(path,b);
+	}
 
 	double sum=0; int mx=0; int big=0; int firstBig=-1;
 	for(size_t i=0;i<a.size();i++){int d=int(a[i])-int(b[i]); if(d<0)d=-d; sum+=d; if(d>mx)mx=d; if(d>8){big++; if(firstBig<0)firstBig=(int)i;}}
