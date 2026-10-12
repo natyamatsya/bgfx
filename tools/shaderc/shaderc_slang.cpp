@@ -926,7 +926,7 @@ namespace bgfx
 		return true;
 	}
 
-	static Slang::ComPtr<slang::ISession> createSlangSession(slang::IGlobalSession* _global, ShadingLang::Enum _targetLang, bool _nativeMetalRT, uint32_t _metalRtGlobalsSlots, uint32_t _profileId, int32_t _uboBinding, bx::WriterI* _messageWriter)
+	static Slang::ComPtr<slang::ISession> createSlangSession(slang::IGlobalSession* _global, ShadingLang::Enum _targetLang, bool _nativeMetalRT, uint32_t _metalRtGlobalsSlots, uint32_t _profileId, int32_t _uboBinding, const std::vector<std::string>& _includeDirs, bx::WriterI* _messageWriter)
 	{
 		slang::TargetDesc target = {};
 		if (ShadingLang::Metal == _targetLang && _nativeMetalRT)
@@ -1026,6 +1026,20 @@ namespace bgfx
 		// design" from RT_WINDOWS_ROADMAP.md M1 is the identity mapping).
 
 		Slang::ComPtr<slang::ISession> session;
+		// The -i dirs are Slang's search paths, so a `#include` in a port resolves exactly
+		// the way it does for a stock .sc -- the modules reached by `import` are preloaded
+		// by path (preloadSlangLibraries), but a shader may also include plain HLSL that
+		// bgfx ships, e.g. examples/common/s2h's library, which is written to compile under
+		// Slang unchanged.
+		std::vector<const char*> searchPaths;
+		searchPaths.reserve(_includeDirs.size() );
+		for (const std::string& dir : _includeDirs)
+		{
+			searchPaths.push_back(dir.c_str() );
+		}
+		sd.searchPaths     = searchPaths.empty() ? NULL : searchPaths.data();
+		sd.searchPathCount = (SlangInt)searchPaths.size();
+
 		if (SLANG_FAILED(_global->createSession(sd, session.writeRef() ) )
 		||  !session)
 		{
@@ -1856,7 +1870,7 @@ namespace bgfx
 		const bool nativeMetalRT = ShadingLang::Metal == _targetLang
 			&& !bx::strFind("riahml", _options.shaderType).isEmpty();
 
-		Slang::ComPtr<slang::ISession> session = createSlangSession(global, _targetLang, nativeMetalRT, _options.metalRtGlobalsSlots, _version, uboBinding, _messageWriter);
+		Slang::ComPtr<slang::ISession> session = createSlangSession(global, _targetLang, nativeMetalRT, _options.metalRtGlobalsSlots, _version, uboBinding, _options.includeDirs, _messageWriter);
 		if (!session)
 		{
 			return false;
