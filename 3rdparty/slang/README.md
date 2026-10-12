@@ -62,6 +62,21 @@ SPIR-V and DXIL targets, and the Metal-target route goes through SPIRV-Cross —
 fork's `MetalRT*` options, which are the only reason the fork build is needed. The version must still
 match these headers or `checkSlangVersion()` rejects it.
 
+The stock build is option-compatible but **not** codegen-identical to the fork, because the fork tip
+sits well above the release tag it is named for (`2026.19-72-ga3a9dfe9a` is 56 upstream commits past
+`v2026.19`) and those commits move SPIR-V codegen: stock fully inlines `cs_cornellbox` (110622 bytes
+against the fork's 31850) and drops `OpName` entries the fork keeps. The committed SPIR-V and Metal
+blobs therefore belong to the macOS fork build — **do not regenerate them from a Windows host**, or
+the two hosts will churn each other's output back and forth, which is what happened across the
+`2026.14.1` bump. DXIL is the other way round: it can only be produced on Windows, and it is immune
+to the divergence above because dxc does its own inlining, so a Slang bump typically leaves every
+DXIL payload byte-identical.
+
+The DXIL blobs also have to be rebuilt on a `BGFX_SHADER_BIN_VERSION` bump, independently of Slang:
+`createShader` rejects an envelope older than the current version outright, so a macOS-side envelope
+regeneration (which cannot touch DXIL) leaves every DXIL blob unloadable until a Windows host catches
+up.
+
 ## Updating
 
 The compiler is built from the `../slang` fork checkout (sibling of this repo). To re-vendor after
