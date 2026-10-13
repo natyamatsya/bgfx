@@ -10,7 +10,7 @@ runtime (`bx::dlopen`), the same way it loads DXC (`dxcompiler`). The backend is
 ## Pinned version
 
 - **Base version:** `2026.19` (`SLANG_VERSION_NUMERIC`)
-- **Build:** `2026.19-72-ga3a9dfe9a` (`SLANG_TAG_VERSION`)
+- **Build:** `2026.19-86-g446e02ba0` (`SLANG_TAG_VERSION`)
 - **Source:** the [`natyamatsya/slang`](https://github.com/natyamatsya/slang) fork, branch
   `metal-rt-impl`, rebased onto upstream Slang `2026.19`. The headers come from that branch, not
   from an official release tarball, because the native Metal RT path needs the fork's compiler
@@ -33,7 +33,7 @@ every bump, because nothing but this check stands between a renumber and silentl
 `shaderc` guards against this at runtime: `checkSlangVersion()` in `tools/shaderc/shaderc_slang.cpp`
 compares `IGlobalSession::getBuildTagString()` against `SLANG_VERSION_NUMERIC` from these headers and
 fails with a named-versions error on skew. Only the numeric version is compared, because a stock
-upstream release reports `2026.19` while the fork build reports `2026.19-72-ga3a9dfe9a` and both
+upstream release reports `2026.19` while the fork build reports `2026.19-86-g446e02ba0` and both
 are supported — see the platform note under *Vendored contents*.
 
 ## Vendored contents
@@ -42,7 +42,7 @@ are supported — see the platform note under *Vendored contents*.
   `slang.h`, `slang-com-ptr.h`, `slang-com-helper.h`, `slang-deprecated.h`,
   `slang-image-format-defs.h`, `slang-tag-version.h`.
 - `../../tools/bin/darwin/libslang.dylib` — the prebuilt `libslang-compiler` shared library from
-  the `2026.19-72-ga3a9dfe9a` fork build (macOS arm64), flattened to a single file. The whole
+  the `2026.19-86-g446e02ba0` fork build (macOS arm64), flattened to a single file. The whole
   `tools/bin/darwin/` directory is otherwise `*`-gitignored, so that one file is explicitly
   un-ignored (`!libslang.dylib`).
 
@@ -63,7 +63,7 @@ fork's `MetalRT*` options, which are the only reason the fork build is needed. T
 match these headers or `checkSlangVersion()` rejects it.
 
 The stock build is option-compatible but **not** codegen-identical to the fork, because the fork tip
-sits well above the release tag it is named for (`2026.19-72-ga3a9dfe9a` is 56 upstream commits past
+sits well above the release tag it is named for (`2026.19-86-g446e02ba0` is 70 upstream commits past
 `v2026.19`) and those commits move SPIR-V codegen: stock fully inlines `cs_cornellbox` (110622 bytes
 against the fork's 31850) and drops `OpName` entries the fork keeps. The committed SPIR-V and Metal
 blobs therefore belong to the macOS fork build — **do not regenerate them from a Windows host**, or
