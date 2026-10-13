@@ -34,10 +34,10 @@ denoised real-time path tracing:
    ray-query stage by `tools/rt-validation/rt_pipeline_cornellbox`: bit-exact on Vulkan
    (RTX 4090 and lavapipe), and within ~80 edge pixels of 65536 on D3D12, where `RayQuery`
    and `TraceRay` tie-break grazing rays differently — deterministically, since an RTX 4090
-   and WARP produce identical output. On Metal the stage passes at 12 big diffs of 65536
-   (budget 16), and the any-hit stage runs there too, on all three backends now.
+   and WARP produce identical output. On Metal the two paths are byte-identical (0 of
+   65536), and the any-hit stage runs there too, on all three backends now.
 
-   Metal any-hit needed two things, one on each side of the compiler boundary:
+   Metal any-hit needed three things, on both sides of the compiler boundary:
 
    - `renderer_mtl`'s `createRtProgram` used to `BX_UNUSED` `_anyHit`. It now links any-hit
      stages, builds an `MTL::IntersectionFunctionTable` from them, publishes the table in
@@ -48,6 +48,9 @@ denoised real-time path tracing:
      module, so a closest-hit never sees its own hit group's any-hit and lowered `TraceRay`
      to the table-less overload. Forcing it makes the choice uniform across a program,
      which the cross-module ABI requires anyway.
+   - `createRtProgram` also binds `slang_RTGlobals` to the intersection function table's
+     buffer slot 0: intersection functions do not see the compute encoder's bindings, so
+     that slot is the only way an any-hit can read the material table.
 
    Geometry opacity turned out **not** to be the obstacle it looks like. `createBlas` builds
    every geometry opaque (inline ray query needs that to auto-commit hits), but the shadow

@@ -1743,6 +1743,14 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				// zero when no hit group has an any-hit.
 				const uint64_t iftId = program.m_ift->gpuResourceID()._impl;
 				bx::memCopy(g + 8, &iftId, 8);
+
+				// Intersection functions (any-hit and intersection stages) do not see the
+				// compute encoder's buffer bindings: the runtime contract (R3) hands them
+				// slang_RTGlobals through the table's own buffer slot 0, the trailing
+				// 'device slang_RTGlobals* [[buffer(0)]]' parameter Slang emits. Without
+				// it every globals read in those stages returns zero -- an any-hit cannot
+				// see the material table, so it cannot let emitters through.
+				program.m_ift->setBuffer(program.m_globalsBuf, 0, 0);
 			}
 			bx::memCopy(g + 16, sbt, 24);
 		}
