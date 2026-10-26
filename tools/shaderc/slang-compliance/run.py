@@ -299,12 +299,14 @@ def main():
     # files are needed when a shader's VS and FS declare different uniform sets
     # (Slang keeps unused UBO members, which would shift offsets in a combined port).
     prefix_stage = {p: s for s, p in STAGES}
+    # Port dirs mirror examples/ and may nest: shaders/common/imgui/ holds the ports of
+    # examples/common/imgui/, the shared ImGui shaders 55-hdr10 exercises.
     cases = []  # (ex, stock_base, stage, slang_path)
-    for ex in sorted(os.listdir(shaders_dir)):
-        exdir = os.path.join(shaders_dir, ex)
-        if not os.path.isdir(exdir):
+    for exdir, _, files in sorted(os.walk(shaders_dir)):
+        ex = os.path.relpath(exdir, shaders_dir)
+        if ex == ".":
             continue
-        for f in sorted(os.listdir(exdir)):
+        for f in sorted(files):
             if not f.endswith(".slang"):
                 continue
             stem = os.path.splitext(f)[0]
