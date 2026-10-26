@@ -186,6 +186,14 @@ def compile_slang(shaderc, root, slang, stage, out, target):
 # (regCount reaches writeUniformHandle for a user uniform).
 _DXIL_DIAGNOSTIC = (3, 5, 8)     # num, regCount, texFormat
 
+# Ordering key for a normalised uniform. The DXIL normalisation blanks fields to None, and
+# texDimension is blanked per-uniform (only where stock could not type the sampler), so two
+# tuples can hold None and an int at the same position -- which plain tuple ordering cannot
+# compare. Sort None first by a flag, so the values themselves are only ever compared when
+# both are present and therefore the same type.
+def _uniform_sort_key(u):
+    return tuple((v is None, "" if v is None else v) for v in u)
+
 def _norm_uniform_target(u, target):
     if target != "dxil":
         return u
@@ -252,8 +260,8 @@ def compare(ref, got, target="spirv"):
     # Compare uniforms as a set, ignoring table order and loose-uniform byte offsets (both
     # cosmetic; see _norm_uniform). Identity (name/type/num/regcount/sampler dims), sampler
     # and storage bindings, and the UBO size are all still checked.
-    ru = sorted(_norm_uniform_target(_norm_uniform(u), target) for u in ref["uniforms"])
-    gu = sorted(_norm_uniform_target(_norm_uniform(u), target) for u in got["uniforms"])
+    ru = sorted((_norm_uniform_target(_norm_uniform(u), target) for u in ref["uniforms"]), key=_uniform_sort_key)
+    gu = sorted((_norm_uniform_target(_norm_uniform(u), target) for u in got["uniforms"]), key=_uniform_sort_key)
     if target == "dxil":
         # Where stock could not type a sampler (texDimension 0, normalised to None above),
         # waive the field on the Slang side for that same sampler and register -- otherwise
@@ -262,7 +270,7 @@ def compare(ref, got, target="spirv"):
         gu = [u[:7] + (None,) + u[8:]
               if (u[1] == "Sampler" and (u[0], u[4]) in untyped) else u
               for u in gu]
-        missing = sorted(set(ru) - set(gu))
+        missing = sorted(set(ru) - set(gu), key=_uniform_sort_key)
         if missing:
             diffs.append(f"uniforms missing from slang: {missing} (slang has {gu})")
     elif ru != gu:

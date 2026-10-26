@@ -1334,11 +1334,19 @@ namespace bgfx
 				// from the bgfx binding slot, so an entry here is not just unnecessary, it is
 				// typed End with no sampler bit, which makes the runtime take it for a user
 				// uniform and warn that it cannot find it.
-				else if (!_dxil
-				&&       toStorageUniform(_slang, field, un, _spirv, name) )
+				//
+				// Recognise it on every target and skip only the table entry. Gating the
+				// recognition itself would drop a storage image through to the
+				// unsupported-global warning below, which is wrong twice over: it is
+				// supported, and the warning fires on every DXIL compile of a shader that
+				// has one.
+				else if (toStorageUniform(_slang, field, un, _spirv, name) )
 				{
-					un.regIndex = uint16_t(binding);
-					_uniforms.push_back(un);
+					if (!_dxil)
+					{
+						un.regIndex = uint16_t(binding);
+						_uniforms.push_back(un);
+					}
 				}
 				else if (toAccelStructUniform(_slang, field, un) )
 				{
