@@ -146,6 +146,30 @@ namespace bgfx
 		| kUniformCompareBit
 		;
 
+	// The sampler macros append their suffix -- bgfx_shader.sh expands SAMPLER2D(_name, _reg)
+	// to `_name ## Sampler` and `_name ## Texture` -- so the bgfx uniform name is whatever
+	// precedes a *trailing* occurrence. Returns an empty view when the suffix is not there.
+	//
+	// Searching for the first occurrence instead mangles any sampler whose own name contains
+	// "Texture" or "Sampler": s_heightTexture keyed its texture under "s_height", so the
+	// lookup from s_heightTextureSampler (which strips to "s_heightTexture") missed it and
+	// left a record with no dimension, and the unpaired-texture pass then emitted a second
+	// record under the truncated name -- two records for one binding, with whichever lands
+	// last deciding m_textureDimension. The SPIR-V, Metal and WGSL reflections already strip
+	// the trailing suffix; this is for the HLSL and DXIL ones, which did not.
+	inline bx::StringView stripTrailing(const bx::StringView& _name, const bx::StringView& _suffix)
+	{
+		const int32_t len = _name.getLength() - _suffix.getLength();
+
+		if (len <= 0
+		||  0 != bx::strCmp(bx::StringView(_name.getPtr() + len, _suffix.getLength() ), _suffix) )
+		{
+			return bx::StringView();
+		}
+
+		return bx::StringView(_name.getPtr(), len);
+	}
+
 	const char* getUniformTypeName(UniformType::Enum _enum);
 	UniformType::Enum nameToUniformTypeEnum(const char* _name);
 

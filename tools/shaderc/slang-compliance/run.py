@@ -200,23 +200,6 @@ def _norm_uniform_target(u, target):
     u = list(u)
     for i in _DXIL_DIAGNOSTIC:
         u[i] = None
-    if u[1] == "Sampler":
-        # Two places where the stock HLSL side is the lossy one, so the comparison applies
-        # its losses to both rather than holding Slang down to them.
-        #
-        # The name: bgfx's SAMPLER2D(u_DmapSampler, 0) declares the texture as
-        # u_DmapSampler, and the stock reflection strips a trailing "Sampler" -- which
-        # over-fires on a name that genuinely ends in it, reporting u_Dmap (41-tess). Slang
-        # reports the declared name. D3D12 never looks a sampler up by name (the sampler
-        # branch uses regIndex and texDimension alone), so neither spelling reaches the
-        # backend; strip the suffix on both sides to compare what is left.
-        u[0] = u[0][:-len("Sampler")] if u[0].endswith("Sampler") else u[0]
-        # texDimension: stock reports 0 -- unknown -- for several textures Slang correctly
-        # types as 2D (27-terrain, 41-tess, 46-fsr's gather/load paths). This one the backend
-        # does read, so it is compared wherever stock knows the answer and waived only where
-        # stock has none to give; marking it here lets compare() pair the two sides up.
-        if u[7] == 0:
-            u[7] = None
     return tuple(u)
 
 def _norm_uniform(u):
@@ -263,13 +246,6 @@ def compare(ref, got, target="spirv"):
     ru = sorted((_norm_uniform_target(_norm_uniform(u), target) for u in ref["uniforms"]), key=_uniform_sort_key)
     gu = sorted((_norm_uniform_target(_norm_uniform(u), target) for u in got["uniforms"]), key=_uniform_sort_key)
     if target == "dxil":
-        # Where stock could not type a sampler (texDimension 0, normalised to None above),
-        # waive the field on the Slang side for that same sampler and register -- otherwise
-        # Slang's correct 2D reads as a mismatch against stock's unknown.
-        untyped = {(u[0], u[4]) for u in ru if u[1] == "Sampler" and u[7] is None}
-        gu = [u[:7] + (None,) + u[8:]
-              if (u[1] == "Sampler" and (u[0], u[4]) in untyped) else u
-              for u in gu]
         missing = sorted(set(ru) - set(gu), key=_uniform_sort_key)
         if missing:
             diffs.append(f"uniforms missing from slang: {missing} (slang has {gu})")

@@ -97,18 +97,18 @@ explicitly: it needs a Windows host, because Slang's DXIL backend goes through
 `libdxcompiler`. Profiles mirror `scripts/shader.mk` -- graphics at `s_6_0`, compute at
 `s_6_5` -- so the suite drives the same route the shipped blobs are built through.
 
-Three envelope fields are normalised on DXIL, because the D3D12 runtime parses but never
-consumes them: `renderer_d3d12.cpp` reads `num` and `texFormat` only to feed a `BX_TRACE`
-(`texComponent` is `BX_UNUSED` outright), and the sampler branch uses `regIndex` and
-`texDimension` alone -- a sampler's `regCount` is never read, unlike a user uniform's,
-which reaches `writeUniformHandle`. Stock and Slang disagree on all three (stock `num=0`
-against Slang's `1`; stock `regCount=1`/`texFormat=0` for a sampled texture against
-Slang's `0`/`41`, i.e. `TextureFormat::Count`). Every field the backend acts on is still
-compared.
+Three envelope fields are not compared on DXIL: `num`, `texFormat` and `regCount`. The
+first two because the D3D12 runtime parses but never consumes them -- `renderer_d3d12.cpp`
+reads both only to feed a `BX_TRACE`, and `texComponent` is `BX_UNUSED` outright -- while
+stock and Slang disagree on each (stock `num=0` against Slang's `1`; stock `texFormat=0`
+for a sampled texture against Slang's `41`, i.e. `TextureFormat::Count`). `regCount` is
+different: the backend does read it for a user uniform, but it is not comparable here for
+the array-trimming reason under *Unused cbuffer members and array tails* below. Every other
+field the backend acts on is still compared, `texDimension` included.
 
 ### DXIL: matching the stock HLSL front-end
 
-All 302 cases pass on `dxil` as of Slang 2026.19. Getting there meant separating two kinds
+All 336 cases pass on `dxil` as of Slang 2026.20. Getting there meant separating two kinds
 of difference, because the Slang front-end emits one reflection for every target while the
 stock front-ends do not agree with each other.
 
@@ -141,15 +141,26 @@ that pins it:
   `size` and `regCount` are not compared, and stock's uniforms must be a *subset* of
   Slang's -- which keeps the direction that matters, since a uniform stock has and Slang
   lacks is one bgfx will not bind.
-- **A sampler name ending in "Sampler".** `SAMPLER2D(u_DmapSampler, 0)` declares the texture
-  as `u_DmapSampler`, and the stock HLSL reflection strips a trailing `Sampler`, which
-  over-fires and reports `u_Dmap` (41-tess). The comparison applies the same strip to both
-  sides. D3D12 never looks a sampler up by name, so neither spelling reaches the backend.
-- **`texDimension` stock cannot determine.** Stock reports 0 for textures Slang correctly
-  types as 2D (27-terrain, 41-tess, 46-fsr's gather/load paths). The backend does read this
-  field, so it is compared wherever stock knows the answer and waived only for the sampler
-  and register where stock has none to give.
+- **Sampler names and `texDimension` -- a stock bug, now fixed.** These were two more
+  normalisations until Slang 2026.20, when upstream's new unpaired-texture pass
+  (`ec6e934a2`) turned a latent bug into a visible one. `shaderc_hlsl.cpp` and
+  `shaderc_dxil.cpp` found the macro's suffix with `bx::strFind`, i.e. the *first*
+  occurrence, so any sampler whose own name contains "Texture" or "Sampler" was mangled:
+  `s_heightTexture` keyed its texture under `s_height`, the lookup from
+  `s_heightTextureSampler` (stripping to `s_heightTexture`) missed it and emitted a record
+  with no dimension, and the unpaired-texture pass then emitted a *second* record under the
+  truncated name. One binding, two records -- `('s_heightTexture', td=0)` and
+  `('s_height', td=2)` -- against Slang's single correct `('s_heightTexture', td=2)`.
+  Affected 27-terrain, 41-tess and 46-fsr. The SPIR-V, Metal and WGSL reflections already
+  stripped the *trailing* suffix, which is why `spirv` always agreed; HLSL and DXIL were the
+  outliers. Both now use the shared `stripTrailing` in `shaderc.h`, so stock emits one
+  correct record, and the two normalisations this used to need are gone from `compare()`.
 
 Fixing A-D changed the DXIL envelopes the tree ships, so the committed DXIL blobs were
 regenerated and `rt_smoke`, `rt_pipeline_smoke`, `rt_pipeline_p0_referee` and
-`rt_pipeline_cornellbox` re-run on the 4090 and on WARP.
+`rt_pipeline_cornellbox` re-run on the 4090 and on WARP. The `stripTrailing` fix does not:
+it is the stock reflection, and the Slang path has its own, so every committed DXIL blob
+regenerates byte-identical across it. The committed *stock* blobs for those three examples
+still carry the duplicate record, which is harmless -- the two records share a register and
+the correctly-typed one is pushed last, so `m_textureDimension` ends up right -- and they
+are left at upstream's state rather than diverged for a cosmetic table entry.

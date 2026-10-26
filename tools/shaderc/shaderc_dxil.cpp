@@ -407,13 +407,13 @@ namespace bgfx { namespace dxil
 			if (SUCCEEDED(_shaderReflection->GetResourceBindingDesc(ii, &bindDesc) )
 			&&  D3D_SIT_TEXTURE == bindDesc.Type)
 			{
-				const bx::StringView end = bx::strFind(bindDesc.Name, "Texture");
+				const bx::StringView base = stripTrailing(bindDesc.Name, "Texture");
 				const TextureDimension::Enum dimension = d3dSrvDimensionToTextureDimension(bindDesc.Dimension);
 
-				if (!end.isEmpty()
+				if (!base.isEmpty()
 				&&  TextureDimension::Count != dimension)
 				{
-					textureBinding[std::string(bindDesc.Name, end.getPtr() - bindDesc.Name)] =
+					textureBinding[std::string(base.getPtr(), base.getLength() )] =
 					{
 						.dimension = textureDimensionToId(dimension),
 						.regIndex  = uint16_t(bindDesc.BindPoint),
@@ -447,12 +447,12 @@ namespace bgfx { namespace dxil
 						, bindDesc.BindCount
 						);
 
-					bx::StringView end = bx::strFind(bindDesc.Name, "Sampler");
+					bx::StringView base = stripTrailing(bindDesc.Name, "Sampler");
 
-					if (!end.isEmpty() )
+					if (!base.isEmpty() )
 					{
 						Uniform un;
-						un.name.assign(bindDesc.Name, (end.getPtr() - bindDesc.Name) );
+						un.name.assign(base.getPtr(), base.getLength() );
 						un.type = UniformType::Enum(kUniformSamplerBit | UniformType::Sampler);
 						un.num = 1;
 						un.regIndex = uint16_t(bindDesc.BindPoint);
@@ -479,14 +479,14 @@ namespace bgfx { namespace dxil
 			if (SUCCEEDED(_shaderReflection->GetResourceBindingDesc(ii, &bindDesc) )
 			&&  D3D_SIT_TEXTURE == bindDesc.Type)
 			{
-				const bx::StringView end = bx::strFind(bindDesc.Name, "Texture");
+				const bx::StringView base = stripTrailing(bindDesc.Name, "Texture");
 
-				if (end.isEmpty() )
+				if (base.isEmpty() )
 				{
 					continue;
 				}
 
-				const std::string name(bindDesc.Name, end.getPtr() - bindDesc.Name);
+				const std::string name(base.getPtr(), base.getLength() );
 				const auto it = textureBinding.find(name);
 
 				if (it != textureBinding.end() )
