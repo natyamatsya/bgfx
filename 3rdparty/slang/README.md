@@ -9,10 +9,10 @@ runtime (`bx::dlopen`), the same way it loads DXC (`dxcompiler`). The backend is
 
 ## Pinned version
 
-- **Base version:** `2026.19` (`SLANG_VERSION_NUMERIC`)
-- **Build:** `2026.19-88-g70ec7dec3` (`SLANG_TAG_VERSION`)
+- **Base version:** `2026.20` (`SLANG_VERSION_NUMERIC`)
+- **Build:** `2026.20-74-g139fb0832` (`SLANG_TAG_VERSION`)
 - **Source:** the [`natyamatsya/slang`](https://github.com/natyamatsya/slang) fork, branch
-  `metal-rt-streamline`: `metal-rt-impl`, rebased onto upstream Slang `2026.19`, plus a
+  `metal-rt-streamline`: `metal-rt-impl`, rebased onto upstream Slang `2026.20`, plus a
   refactor of the Metal RT lowering onto Slang's shared RT passes. The headers come from that
   branch, not from an official release tarball, because the native Metal RT path needs the fork's
   compiler changes (the `MetalRT*` entries in `CompilerOptionName`).
@@ -28,13 +28,14 @@ and links fine and then silently applies the wrong options. The `2026.16` bump d
 but `2026.19` did again, by six: upstream added `TraceCoverageBindlessIndex`, `GetCompilerPath`,
 `BitfieldPackingRules`, `DisableNotes`, `DiagnosticFormat` and
 `EnableExtendedHLSLBackwardsCompatibility` (`158`..`163`) ahead of the fork's options, so
-`MetalRTForceIsectTable`..`MetalRTGlobalsSlots` went `158`..`161` → `164`..`167`. Check them on
-every bump, because nothing but this check stands between a renumber and silently wrong codegen.
+`MetalRTForceIsectTable`..`MetalRTGlobalsSlots` went `158`..`161` → `164`..`167`; `2026.20`
+kept them. Check them on every bump, because nothing but this check stands between a renumber
+and silently wrong codegen.
 
 `shaderc` guards against this at runtime: `checkSlangVersion()` in `tools/shaderc/shaderc_slang.cpp`
 compares `IGlobalSession::getBuildTagString()` against `SLANG_VERSION_NUMERIC` from these headers and
 fails with a named-versions error on skew. Only the numeric version is compared, because a stock
-upstream release reports `2026.19` while the fork build reports `2026.19-88-g70ec7dec3` and both
+upstream release reports `2026.20` while the fork build reports `2026.20-74-g139fb0832` and both
 are supported — see the platform note under *Vendored contents*.
 
 ## Vendored contents
@@ -43,7 +44,7 @@ are supported — see the platform note under *Vendored contents*.
   `slang.h`, `slang-com-ptr.h`, `slang-com-helper.h`, `slang-deprecated.h`,
   `slang-image-format-defs.h`, `slang-tag-version.h`.
 - `../../tools/bin/darwin/libslang.dylib` — the prebuilt `libslang-compiler` shared library from
-  the `2026.19-88-g70ec7dec3` fork build (macOS arm64), flattened to a single file. The whole
+  the `2026.20-74-g139fb0832` fork build (macOS arm64), flattened to a single file. The whole
   `tools/bin/darwin/` directory is otherwise `*`-gitignored, so that one file is explicitly
   un-ignored (`!libslang.dylib`).
 
@@ -64,8 +65,8 @@ fork's `MetalRT*` options, which are the only reason the fork build is needed. T
 match these headers or `checkSlangVersion()` rejects it.
 
 The stock build is option-compatible but **not** codegen-identical to the fork, because the fork tip
-sits well above the release tag it is named for (`2026.19-88-g70ec7dec3` is 70 upstream commits past
-`v2026.19`) and those commits move SPIR-V codegen: stock fully inlines `cs_cornellbox` (110622 bytes
+sits well above the release tag it is named for (`2026.20-74-g139fb0832` is 56 upstream commits past
+`v2026.20`) and those commits move SPIR-V codegen: stock fully inlines `cs_cornellbox` (110622 bytes
 against the fork's 31850) and drops `OpName` entries the fork keeps. The committed SPIR-V and Metal
 blobs therefore belong to the macOS fork build — **do not regenerate them from a Windows host**, or
 the two hosts will churn each other's output back and forth, which is what happened across the
